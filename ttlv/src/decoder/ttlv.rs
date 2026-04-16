@@ -246,6 +246,16 @@ mod tests {
     }
 
     #[test]
+    fn test_decode_boolean_malformed_short_value() {
+        // Boolean type (0x06) with length 3 instead of the required 8.
+        // Tag=0x420020, Type=Boolean(0x06), Length=3, Value=0x01 0x02 0x03 + 5 pad bytes
+        let input = hex("42 00 20 | 06 | 00 00 00 03 | 01 02 03 00 00 00 00 00");
+        let mut dec = TtlvDecoder::new(&input);
+        let err = dec.read_bool(0x420020).unwrap_err();
+        assert!(matches!(err, Error::ValueTooShort(_)));
+    }
+
+    #[test]
     fn test_decode_string() {
         let input =
             hex("42 00 20 | 07 | 00 00 00 0B | 48 65 6C 6C 6F 20 57 6F 72 6C 64 00 00 00 00 00");
