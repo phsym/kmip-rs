@@ -208,7 +208,7 @@ fn test_struct_set_ext_and_if() {
         impl Toto {
             pub fn flatten_decode<D: ::ttlv::Decoder>(d: &mut D) -> ::ttlv::Result<Self> {
                 let _field1: u32 = d.decode()?;
-                d.extensions().insert(_field1.clone());;
+                d.extensions().insert(_field1.clone());
                 let _field2 = {
                     use ::ttlv::ExtensionsExt;
                     let _ext = d.extensions();
@@ -218,7 +218,7 @@ fn test_struct_set_ext_and_if() {
                     } else {
                         Default::default()
                     }
-                };;
+                };
                 let res = Self {
                     field1: _field1,
                     field2: _field2

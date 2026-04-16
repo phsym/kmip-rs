@@ -6,7 +6,7 @@
 //! so this module provides a shared `parse_ttlv_variants()` function.
 
 use proc_macro2::Literal;
-use syn::{DataEnum, Error, Expr, Fields, Ident, Result};
+use syn::{DataEnum, Error, Expr, Fields, Ident, Lit, Result};
 
 use crate::AttrExt;
 
@@ -29,6 +29,15 @@ pub fn parse_ttlv_variants(en: &DataEnum) -> Result<Vec<TtlvVariant>> {
         let ident = var.ident.clone();
 
         if attrs.default {
+            match &var.fields {
+                Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {}
+                _ => {
+                    return Err(Error::new_spanned(
+                        &var.ident,
+                        "Default variant must have exactly one unnamed field",
+                    ));
+                }
+            }
             result.push(TtlvVariant {
                 ident,
                 discriminant: syn::parse_quote!(0), // placeholder, not used for default
@@ -47,6 +56,12 @@ pub fn parse_ttlv_variants(en: &DataEnum) -> Result<Vec<TtlvVariant>> {
                 .as_ref()
                 .ok_or(Error::new_spanned(&var.ident, "Missing discriminant"))?
                 .1;
+            if !matches!(disc, Expr::Lit(lit) if matches!(lit.lit, Lit::Int(_))) {
+                return Err(Error::new_spanned(
+                    disc,
+                    "Discriminant must be an integer literal",
+                ));
+            }
             result.push(TtlvVariant {
                 ident,
                 discriminant: disc.clone(),
