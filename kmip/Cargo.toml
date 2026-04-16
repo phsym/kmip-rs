@@ -1,0 +1,79 @@
+[package]
+name = "kmip"
+publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["uuid", "tls-rustls"]
+tls-native = ["dep:native-tls"]
+tls-rustls = ["dep:rustls", "dep:rustls-platform-verifier"]
+tls-openssl = ["dep:openssl"]
+tls-boring = ["dep:boring"]
+
+arbitrary = ["dep:arbitrary", "ttlv/arbitrary", "bitflags/arbitrary", "chrono/arbitrary"]
+serde = ["dep:serde", "dep:serde_with", "dep:cfg_eval", "bitflags/serde", "ttlv/serde", "chrono/serde"]
+
+interop-openssl = ["dep:openssl"]
+interop-boring = ["dep:boring"]
+
+interop-rust-crypto = ["interop-rsa", "interop-p256", "interop-p384", "interop-p521"]
+interop-rsa = ["dep:rsa"]
+_interop-elliptic-curve = ["dep:elliptic-curve", "dep:typenum", "dep:sec1", "dep:pkcs8"]
+interop-p256 = ["dep:p256", "_interop-elliptic-curve"]
+interop-p384 = ["dep:p384", "_interop-elliptic-curve"]
+interop-p521 = ["dep:p521", "_interop-elliptic-curve"]
+
+uuid = ["dep:uuid"]
+
+_integration_tests = ["interop-rust-crypto"]
+
+[dependencies]
+ttlv = { path = "../ttlv" }
+
+thiserror = "2"
+anyhow = "1"
+bitflags = "2"
+strum = "0.27"
+strum_macros = "0.27"
+chrono = "0.4"
+tracing = "0.1"
+
+uuid = { version = "1", optional = true, features = ["v4"] }
+
+native-tls = { version = "0.2", optional = true }
+
+rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "logging", "std", "tls12"] }
+rustls-platform-verifier = { version = "0.6", optional = true }
+
+openssl = { version = "0.10", optional = true }
+
+boring = { version = "4", optional = true }
+
+arbitrary = { version = "1", features = ["derive"], optional = true }
+serde = { version = "1", optional = true, features = ["derive"] }
+serde_with = { version = "3", optional = true, features = ["base64"] }
+cfg_eval = { version = "0.1", optional = true }
+
+rsa = { version = "0.9", default-features = false, features = ["std"], optional = true }
+p256 = { version = "0.13", default-features = false, features = ["arithmetic", "pkcs8"], optional = true }
+p384 = { version = "0.13", default-features = false, features = ["arithmetic", "pkcs8"], optional = true }
+p521 = { version = "0.13", default-features = false, features = ["arithmetic", "pkcs8"], optional = true }
+elliptic-curve = { version = "0.13", default-features = false, features = ["std", "pkcs8", "sec1", "arithmetic"], optional = true }
+pkcs8 = { version = "0.10", default-features = false, optional = true }
+sec1 = { version = "0.7", default-features = false, optional = true }
+typenum = { version = "1", default-features = false, optional = true }
+
+[dev-dependencies]
+# kmip = { path = ".", features = ["interop-rust-crypto"] }
+rsa = { version = "0.9", default-features = false, features = ["std"] }
+p256 = { version = "0.13", default-features = false, features = ["arithmetic", "pkcs8"] }
+rand = "0.8"
+rcgen = "0.14"

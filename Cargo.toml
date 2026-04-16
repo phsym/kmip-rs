@@ -1,0 +1,19 @@
+[workspace]
+default-members = ["kmip"]
+resolver = "3"
+members = [
+    "kmip",
+    "ttlv",
+    "ttlv-derive",
+]
+
+[workspace.package]
+publish = false
+repository = "https://github.com/phsym/kmip-rs"
+homepage = "https://www.ovhcloud.com"
+rust-version = "1.93.0"
+authors = ["Pierre-Henri Symoneaux <pierre-henri.symoneaux@ovhcloud.com>"]
+edition = "2024"
+version = "0.1.0"
+license = "Unlicense"
+
