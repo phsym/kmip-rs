@@ -37,6 +37,36 @@ impl<'a> BatchClient<'a> {
     }
 }
 
+impl Client {
+    pub fn export(&mut self, id: impl Into<String>) -> ExportExec<'_> {
+        ExportExec::new(
+            self,
+            ExportRequestPayload {
+                unique_identifier: Some(id.into()),
+                key_format_type: None,
+                key_wrap_type: None,
+                key_compression_type: None,
+                key_wrapping_specification: None,
+            },
+        )
+    }
+}
+
+impl<'a> BatchClient<'a> {
+    pub fn export(self, id: Option<String>) -> ExportExec<'a> {
+        ExportExec::new(
+            self.0,
+            ExportRequestPayload {
+                unique_identifier: id,
+                key_format_type: None,
+                key_wrap_type: None,
+                key_compression_type: None,
+                key_wrapping_specification: None,
+            },
+        )
+    }
+}
+
 impl ImportExec<'_> {
     pub fn with_replace_existing(mut self, replace: bool) -> Self {
         self.req.replace_existing = Some(replace);
