@@ -5,6 +5,7 @@ use std::{
     net::{TcpListener, TcpStream},
     path::Path,
     sync::Arc,
+    time::Duration,
 };
 
 use crate::{
@@ -60,10 +61,15 @@ impl Transport for TcpStream {
 pub struct WantServerCert;
 pub struct Ready;
 
+const DEFAULT_SOCKET_TIMEOUT: Option<Duration> = Some(Duration::from_secs(30));
+
 #[must_use = "builder must be used to create an Acceptor"]
 pub struct AcceptorBuilder<T> {
     root_certs: Vec<Vec<u8>>,
     identity: Option<(Vec<u8>, Vec<u8>)>,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
+    tcp_nodelay: bool,
     _st: PhantomData<T>,
 }
 
@@ -81,6 +87,9 @@ impl AcceptorBuilder<WantServerCert> {
         AcceptorBuilder {
             root_certs: self.root_certs,
             identity: self.identity,
+            read_timeout: self.read_timeout,
+            write_timeout: self.write_timeout,
+            tcp_nodelay: self.tcp_nodelay,
             _st: PhantomData,
         }
     }
@@ -97,6 +106,9 @@ impl AcceptorBuilder<WantServerCert> {
         Self {
             identity: None,
             root_certs: Vec::new(),
+            read_timeout: DEFAULT_SOCKET_TIMEOUT,
+            write_timeout: DEFAULT_SOCKET_TIMEOUT,
+            tcp_nodelay: true,
             _st: PhantomData,
         }
     }
@@ -112,8 +124,36 @@ impl<T> AcceptorBuilder<T> {
         self
     }
 
+    pub fn read_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.read_timeout = timeout;
+        self
+    }
+
+    pub fn write_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.write_timeout = timeout;
+        self
+    }
+
+    pub fn tcp_nodelay(mut self, nodelay: bool) -> Self {
+        self.tcp_nodelay = nodelay;
+        self
+    }
+
     // TODO: Add KMIP authentication
     // TODO: Fine tune TLS cipher suites when/if possible
+}
+
+#[allow(dead_code)]
+pub(crate) fn configure_stream(
+    stream: &TcpStream,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
+    tcp_nodelay: bool,
+) -> io::Result<()> {
+    stream.set_read_timeout(read_timeout)?;
+    stream.set_write_timeout(write_timeout)?;
+    stream.set_nodelay(tcp_nodelay)?;
+    Ok(())
 }
 
 pub struct Server<A: Acceptor, H: RequestHandler> {

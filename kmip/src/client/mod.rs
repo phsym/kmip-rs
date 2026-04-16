@@ -6,9 +6,10 @@ use crate::{
 use std::{
     fs,
     io::{self, ErrorKind, Read, Write},
+    net::TcpStream,
     path::Path,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
     vec::IntoIter,
 };
 
@@ -47,11 +48,27 @@ const DEFAULT_SUPPORTED_VERSIONS: &[ProtocolVersion] = &[
     ProtocolVersion::V1_0,
 ];
 
-#[derive(Default)]
+const DEFAULT_SOCKET_TIMEOUT: Option<Duration> = Some(Duration::from_secs(30));
+
 #[must_use = "builder must be used to create a Client"]
 pub struct ClientBuilder {
     root_certs: Vec<Vec<u8>>,
     identity: Option<(Vec<u8>, Vec<u8>)>,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
+    tcp_nodelay: bool,
+}
+
+impl Default for ClientBuilder {
+    fn default() -> Self {
+        Self {
+            root_certs: Vec::new(),
+            identity: None,
+            read_timeout: DEFAULT_SOCKET_TIMEOUT,
+            write_timeout: DEFAULT_SOCKET_TIMEOUT,
+            tcp_nodelay: true,
+        }
+    }
 }
 
 impl ClientBuilder {
@@ -81,8 +98,35 @@ impl ClientBuilder {
         self
     }
 
+    pub fn read_timeout(&mut self, timeout: Option<Duration>) -> &mut Self {
+        self.read_timeout = timeout;
+        self
+    }
+
+    pub fn write_timeout(&mut self, timeout: Option<Duration>) -> &mut Self {
+        self.write_timeout = timeout;
+        self
+    }
+
+    pub fn tcp_nodelay(&mut self, nodelay: bool) -> &mut Self {
+        self.tcp_nodelay = nodelay;
+        self
+    }
+
     // TODO: Add KMIP authentication
     // TODO: Fine tune TLS cipher suites when/if possible
+}
+
+pub(crate) fn configure_stream(
+    stream: &TcpStream,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
+    tcp_nodelay: bool,
+) -> io::Result<()> {
+    stream.set_read_timeout(read_timeout)?;
+    stream.set_write_timeout(write_timeout)?;
+    stream.set_nodelay(tcp_nodelay)?;
+    Ok(())
 }
 
 pub trait Transport: Read + Write + Send {}

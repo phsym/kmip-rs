@@ -3,6 +3,7 @@ use std::{
     io,
     net::{SocketAddr, TcpStream, ToSocketAddrs},
     sync::Arc,
+    time::Duration,
 };
 
 use rustls::{
@@ -16,7 +17,7 @@ use rustls_platform_verifier::BuilderVerifierExt;
 
 use crate::{Error, Result};
 
-use super::{Client, ClientBuilder, Connector};
+use super::{Client, ClientBuilder, Connector, configure_stream};
 
 pub type Rustls = StreamOwned<ClientConnection, TcpStream>;
 
@@ -24,6 +25,9 @@ pub struct RustlsConnector {
     cfg: Arc<ClientConfig>,
     domain: String,
     addr: Vec<SocketAddr>,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
+    tcp_nodelay: bool,
 }
 
 impl RustlsConnector {
@@ -31,11 +35,17 @@ impl RustlsConnector {
         cfg: ClientConfig,
         addr: impl ToSocketAddrs,
         domain: impl Into<String>,
+        read_timeout: Option<Duration>,
+        write_timeout: Option<Duration>,
+        tcp_nodelay: bool,
     ) -> io::Result<Self> {
         Ok(Self {
             cfg: Arc::new(cfg),
             domain: domain.into(),
             addr: addr.to_socket_addrs()?.collect(),
+            read_timeout,
+            write_timeout,
+            tcp_nodelay,
         })
     }
 }
@@ -52,6 +62,12 @@ impl Connector for RustlsConnector {
                 .map_err(|e: InvalidDnsNameError| Error::TLS(e.into()))?,
         )?;
         let mut sock = TcpStream::connect(&self.addr[..])?;
+        configure_stream(
+            &sock,
+            self.read_timeout,
+            self.write_timeout,
+            self.tcp_nodelay,
+        )?;
         // Drive the TLS handshake to completion right now
         conn.complete_io(&mut sock)?;
         let stream = StreamOwned::new(conn, sock);
@@ -82,6 +98,13 @@ impl ClientBuilder {
         } else {
             cfg.with_no_client_auth()
         };
-        Client::new(RustlsConnector::new(cfg, addr, domain)?)
+        Client::new(RustlsConnector::new(
+            cfg,
+            addr,
+            domain,
+            self.read_timeout,
+            self.write_timeout,
+            self.tcp_nodelay,
+        )?)
     }
 }

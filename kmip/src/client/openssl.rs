@@ -2,6 +2,7 @@ use std::{
     io,
     net::SocketAddr,
     net::{TcpStream, ToSocketAddrs},
+    time::Duration,
 };
 
 use openssl::{
@@ -12,7 +13,7 @@ use openssl::{
 
 use crate::{Error, Result};
 
-use super::{Client, ClientBuilder, Connector};
+use super::{Client, ClientBuilder, Connector, configure_stream};
 
 pub type OpenSsl = SslStream<TcpStream>;
 
@@ -42,7 +43,14 @@ impl ClientBuilder {
         }
         bld.set_verify(SslVerifyMode::PEER);
 
-        Client::new(OpenSslConnector::new(bld.build(), addr, domain)?)
+        Client::new(OpenSslConnector::new(
+            bld.build(),
+            addr,
+            domain,
+            self.read_timeout,
+            self.write_timeout,
+            self.tcp_nodelay,
+        )?)
     }
 }
 
@@ -50,6 +58,9 @@ pub struct OpenSslConnector {
     inner: SslConnector,
     domain: String,
     addr: Vec<SocketAddr>,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
+    tcp_nodelay: bool,
 }
 
 impl OpenSslConnector {
@@ -57,11 +68,17 @@ impl OpenSslConnector {
         cfg: SslConnector,
         addr: impl ToSocketAddrs,
         domain: impl Into<String>,
+        read_timeout: Option<Duration>,
+        write_timeout: Option<Duration>,
+        tcp_nodelay: bool,
     ) -> io::Result<Self> {
         Ok(Self {
             inner: cfg,
             domain: domain.into(),
             addr: addr.to_socket_addrs()?.collect(),
+            read_timeout,
+            write_timeout,
+            tcp_nodelay,
         })
     }
 }
@@ -71,6 +88,12 @@ impl Connector for OpenSslConnector {
 
     fn connect(&self) -> Result<Self::Transport> {
         let sock = TcpStream::connect(&self.addr[..])?;
+        configure_stream(
+            &sock,
+            self.read_timeout,
+            self.write_timeout,
+            self.tcp_nodelay,
+        )?;
         let mut tls_stream = match self.inner.connect(&self.domain, sock) {
             Ok(s) => s,
             Err(HandshakeError::SetupFailure(e)) => return Err(e.into()),
