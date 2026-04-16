@@ -20,9 +20,9 @@ pub enum Error {
     MissingBatchItem,
     #[error("The payload is missing from the response")]
     MissingResponsePayload,
-    #[error("Unexpected response payload (want: {want}")]
+    #[error("Unexpected response payload (want: {want})")]
     UnexpectedResponsePayload { want: &'static str },
-    #[error("Unexpected request payload (want: {want}")]
+    #[error("Unexpected request payload (want: {want})")]
     UnexpectedRequestPayload { want: &'static str },
     #[error(transparent)]
     UnexpectedObject(#[from] UnexpectedObject),

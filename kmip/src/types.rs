@@ -303,6 +303,7 @@ impl CryptographicParameters {
     fn rsa_oaep(hash: HashingAlgorithm) -> Self {
         Self {
             cryptographic_algorithm: Some(CryptographicAlgorithm::RSA),
+            padding_method: Some(PaddingMethod::OAEP),
             hashing_algorithm: Some(hash),
             mask_generator: Some(MaskGenerator::MGF1),
             mask_generator_hashing_algorithm: Some(hash),
