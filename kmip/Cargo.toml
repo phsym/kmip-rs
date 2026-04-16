@@ -39,7 +39,6 @@ _integration_tests = ["interop-rust-crypto"]
 ttlv = { version = "*", path = "../ttlv" }
 
 thiserror = "2"
-anyhow = "1"
 bitflags = "2"
 strum = "0.28"
 strum_macros = "0.28"
