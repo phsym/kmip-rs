@@ -10,8 +10,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     #[error("TTLV encoding error: {0}")]
     TTLV(#[from] ttlv::Error),
-    #[error(transparent)]
-    TLS(anyhow::Error),
+    #[error("TLS error: {0}")]
+    TLS(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error(transparent)]
     IO(#[from] std::io::Error),
     #[error(transparent)]

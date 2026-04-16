@@ -32,7 +32,7 @@ impl ClientBuilder {
             bld.set_certificate(
                 certs
                     .next()
-                    .ok_or(Error::TLS(anyhow::anyhow!("Bad client certificate")))?
+                    .ok_or(Error::TLS("Bad client certificate".into()))?
                     .as_ref(),
             )?;
             for cert in certs {

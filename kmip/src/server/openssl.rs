@@ -57,7 +57,7 @@ impl AcceptorBuilder<Ready> {
         acc.set_certificate(
             certs
                 .next()
-                .ok_or(crate::Error::TLS(anyhow::anyhow!("Bad client certificate")))?
+                .ok_or(crate::Error::TLS("Bad client certificate".into()))?
                 .as_ref(),
         )?;
         for cert in certs {
