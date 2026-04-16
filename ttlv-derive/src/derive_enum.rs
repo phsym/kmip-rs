@@ -1,9 +1,18 @@
+//! Code generation for `#[derive(Enum)]`.
+//!
+//! Generates a `name() -> &str` method and a `Display` impl for TTLV enums.
+//! Each variant maps to its name string (or `#[ttlv(rename = "...")]` override),
+//! and the `#[ttlv(default)]` catch-all variant delegates to the inner value's
+//! `Tag::name()` method.
+
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Data, DataEnum, DeriveInput, Error, Fields, Ident, Result};
+use syn::{Data, DataEnum, DeriveInput, Error, Ident, Result};
 
+use crate::ttlv_enum::parse_ttlv_variants;
 use crate::{AttrExt, EnumAttr};
 
+/// Entry point for `#[derive(Enum)]`. Only enums with `#[ttlv(enum)]` are accepted.
 pub fn derive_enum_fn2(item: TokenStream2) -> Result<TokenStream2> {
     let ast: DeriveInput = syn::parse2(item)?;
     let attr = ast.attrs.get_attr()?;
@@ -14,36 +23,28 @@ pub fn derive_enum_fn2(item: TokenStream2) -> Result<TokenStream2> {
     }
 }
 
-pub fn derive_enum(en: DataEnum, ident: Ident, enum_attr: EnumAttr) -> Result<TokenStream2> {
+fn derive_enum(en: DataEnum, ident: Ident, enum_attr: EnumAttr) -> Result<TokenStream2> {
     match enum_attr {
-        EnumAttr::Enum(_) => derive_enum_enum(en, ident),
-        _ => Err(Error::new_spanned(
-            &ident,
-            "Missing the ttlv 'enum' attribute",
-        )),
+        EnumAttr::Enum(_) => {}
+        _ => {
+            return Err(Error::new_spanned(
+                &ident,
+                "Missing the ttlv 'enum' attribute",
+            ));
+        }
     }
-}
 
-fn derive_enum_enum(en: DataEnum, ident: Ident) -> Result<TokenStream2> {
+    let variants = parse_ttlv_variants(&en)?;
+
     let mut branches = Vec::new();
-    for var in en.variants {
-        // Validate the attributes
-        let attrs = var.attrs.get_attr()?.for_enum_variant()?;
+    for var in &variants {
         let vident = &var.ident;
-        if attrs.default {
+        if var.is_default {
             branches.push(quote! {Self::#vident(value) => value.name().unwrap_or("Unknown")});
+        } else if let Some(ref rename) = var.rename {
+            branches.push(quote! {Self::#vident => #rename});
         } else {
-            if !matches!(var.fields, Fields::Unit) {
-                return Err(Error::new_spanned(
-                    &var.ident,
-                    "Only unit fields are supported",
-                ));
-            }
-            if let Some(rename) = attrs.rename {
-                branches.push(quote! {Self::#vident =>  #rename});
-            } else {
-                branches.push(quote! {Self::#vident => ::std::stringify!(#vident)});
-            }
+            branches.push(quote! {Self::#vident => ::std::stringify!(#vident)});
         }
     }
 
