@@ -18,7 +18,7 @@ use ttlv::{Decodable, Decoder, Encodable, MaybeKnownTag};
 
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
-#[derive(Debug, Clone, PartialEq, Eq, Encodable, Decodable)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encodable, Decodable)]
 #[ttlv(tag = Tags::ProtocolVersion)]
 pub struct ProtocolVersion {
     #[ttlv(tag = Tags::ProtocolVersionMajor)]

@@ -147,7 +147,7 @@ impl Client {
 
     pub fn version(&mut self) -> crate::Result<ProtocolVersion> {
         if let Some(v) = &self.version {
-            return Ok(v.clone());
+            return Ok(*v);
         }
         let resp = self.roundtrip(&RequestMessage::new(
             ProtocolVersion::V1_1,
@@ -174,13 +174,13 @@ impl Client {
             }) => {
                 // TODO: Check that default version is in the supported version list before using it
                 self.version = Some(ProtocolVersion::default());
-                return Ok(self.version.clone().unwrap());
+                return Ok(self.version.unwrap());
             }
             Err(other) => return Err(other.into()),
         };
 
         let version = pl.protocol_version.into_iter().next().unwrap_or_default();
-        self.version = Some(version.clone());
+        self.version = Some(version);
         // println!("Negociated version: {}", version);
         Ok(version)
     }
