@@ -635,7 +635,7 @@ pub enum QueryFunction {
     QueryServerInformation = 0x00000003,
     QueryApplicationNamespaces = 0x00000004,
     // KMIP 1.1
-    QueryExtensionList = 0x0000005,
+    QueryExtensionList = 0x00000005,
     QueryExtensionMap = 0x00000006,
     //KMIP 1.2
     QueryAttestationTypes = 0x00000007,
