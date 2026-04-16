@@ -16,7 +16,7 @@ default = ["chrono", "derive", "xml", "text", "bitflags"]
 chrono = ["dep:chrono"]
 derive = ["dep:ttlv-derive"]
 xml = ["dep:quick-xml", "dep:data-encoding", "chrono"]
-text = ["chrono"]
+text = ["chrono", "dep:data-encoding"]
 
 arbitrary = ["dep:arbitrary"]
 serde = ["dep:serde", "dep:serde_with", "dep:cfg_eval"]

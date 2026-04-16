@@ -84,7 +84,9 @@ pub enum Error {
     #[error(transparent)]
     InvalidBool(#[from] ParseBoolError),
     #[error(transparent)]
+    #[cfg(any(feature = "xml", feature = "text"))]
     InvalidHex(#[from] data_encoding::DecodeError),
+    #[cfg(feature = "chrono")]
     #[error("Invalid date-time format: {0}")]
     InvalidDateTime(#[from] chrono::ParseError),
     #[error("Invalid bitmask value: {0}")]
