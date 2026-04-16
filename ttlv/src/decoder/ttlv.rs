@@ -146,7 +146,8 @@ impl<E: BorrowMut<Extensions>> Decoder for TtlvDecoder<'_, E> {
 
     fn read_bool(&mut self, tag: impl Tag) -> Result<bool> {
         self.assert_type(Type::Boolean, &tag)?;
-        let v = self.value()?[7] != 0;
+        let bytes: [u8; 8] = self.value()?.try_into()?;
+        let v = bytes[7] != 0;
         self.next()?;
         Ok(v)
     }
