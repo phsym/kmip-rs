@@ -79,14 +79,14 @@ fn derive_struct(data: DataStruct, ident: Ident, struct_attr: StructAttr) -> Res
                         } else {
                             Default::default()
                         }
-                    };
+                    }
                 }
             }
 
             if f.set_ext {
                 call = quote! {
                     #call;
-                    d.extensions().insert(#var.clone());
+                    d.extensions().insert(#var.clone())
                 }
             }
 
