@@ -48,6 +48,7 @@ const DEFAULT_SUPPORTED_VERSIONS: &[ProtocolVersion] = &[
 ];
 
 #[derive(Default)]
+#[must_use = "builder must be used to create a Client"]
 pub struct ClientBuilder {
     root_certs: Vec<Vec<u8>>,
     identity: Option<(Vec<u8>, Vec<u8>)>,
