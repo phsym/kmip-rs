@@ -4,7 +4,7 @@ on:
   push:
     # run only against tags
     tags:
-      - "v*.*.*"  
+      - "v*.*.*"
 
 permissions:
   contents: write
@@ -23,7 +23,7 @@ jobs:
       - uses: ./.github/actions/setup-build-env
       - name: Verify Cargo.toml for version '${{ github.ref_name }}'
         run: |
-          CRATE_VERSION="v$(cargo read-manifest --manifest-path=kmsctl/Cargo.toml | jq -r '.version')"
+          CRATE_VERSION="v$(cargo read-manifest --manifest-path=kmip/Cargo.toml | jq -r '.version')"
           echo "CRATE_VERSION=$CRATE_VERSION" >> $GITHUB_ENV
           if [ "${{ github.ref_name }}" != "$CRATE_VERSION" ]; then
             echo "Crate version and git tag mismatch"
