@@ -60,6 +60,7 @@ impl Transport for TcpStream {
 pub struct WantServerCert;
 pub struct Ready;
 
+#[must_use = "builder must be used to create an Acceptor"]
 pub struct AcceptorBuilder<T> {
     root_certs: Vec<Vec<u8>>,
     identity: Option<(Vec<u8>, Vec<u8>)>,
