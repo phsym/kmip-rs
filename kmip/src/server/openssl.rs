@@ -1,4 +1,7 @@
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::{
+    net::{TcpListener, TcpStream, ToSocketAddrs},
+    time::Duration,
+};
 
 use openssl::{
     pkey::PKey,
@@ -6,7 +9,7 @@ use openssl::{
     x509::X509,
 };
 
-use super::{Acceptor, AcceptorBuilder, Ready, Transport};
+use super::{Acceptor, AcceptorBuilder, Ready, Transport, configure_stream};
 
 impl Transport for SslStream<TcpStream> {
     fn remote_address(&self) -> std::io::Result<std::net::SocketAddr> {
@@ -17,13 +20,25 @@ impl Transport for SslStream<TcpStream> {
 pub struct OpenSslAcceptor {
     list: TcpListener,
     cfg: SslAcceptor,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
+    tcp_nodelay: bool,
 }
 
 impl OpenSslAcceptor {
-    pub fn new(cfg: SslAcceptor, a: impl ToSocketAddrs) -> std::io::Result<Self> {
+    pub fn new(
+        cfg: SslAcceptor,
+        a: impl ToSocketAddrs,
+        read_timeout: Option<Duration>,
+        write_timeout: Option<Duration>,
+        tcp_nodelay: bool,
+    ) -> std::io::Result<Self> {
         Ok(Self {
             list: TcpListener::bind(a)?,
             cfg,
+            read_timeout,
+            write_timeout,
+            tcp_nodelay,
         })
     }
 }
@@ -33,6 +48,12 @@ impl Acceptor for OpenSslAcceptor {
 
     fn accept(&self) -> crate::Result<Self::Transport> {
         let (sock, _) = self.list.accept()?;
+        configure_stream(
+            &sock,
+            self.read_timeout,
+            self.write_timeout,
+            self.tcp_nodelay,
+        )?;
         let mut stream = self.cfg.accept(sock)?;
         stream.do_handshake()?;
         Ok(stream)
@@ -65,6 +86,12 @@ impl AcceptorBuilder<Ready> {
         }
         acc.set_private_key(PKey::private_key_from_pem(key)?.as_ref())?;
 
-        Ok(OpenSslAcceptor::new(acc.build(), addr)?)
+        Ok(OpenSslAcceptor::new(
+            acc.build(),
+            addr,
+            self.read_timeout,
+            self.write_timeout,
+            self.tcp_nodelay,
+        )?)
     }
 }

@@ -1,6 +1,7 @@
 use std::{
     net::{TcpListener, TcpStream, ToSocketAddrs},
     sync::Arc,
+    time::Duration,
 };
 
 use rustls::{
@@ -9,7 +10,7 @@ use rustls::{
     server::WebPkiClientVerifier,
 };
 
-use super::{Acceptor, AcceptorBuilder, Ready, Transport};
+use super::{Acceptor, AcceptorBuilder, Ready, Transport, configure_stream};
 
 impl Transport for StreamOwned<ServerConnection, TcpStream> {
     fn remote_address(&self) -> std::io::Result<std::net::SocketAddr> {
@@ -20,13 +21,25 @@ impl Transport for StreamOwned<ServerConnection, TcpStream> {
 pub struct RustlsAcceptor {
     list: TcpListener,
     cfg: Arc<ServerConfig>,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
+    tcp_nodelay: bool,
 }
 
 impl RustlsAcceptor {
-    pub fn new(cfg: ServerConfig, a: impl ToSocketAddrs) -> std::io::Result<Self> {
+    pub fn new(
+        cfg: ServerConfig,
+        a: impl ToSocketAddrs,
+        read_timeout: Option<Duration>,
+        write_timeout: Option<Duration>,
+        tcp_nodelay: bool,
+    ) -> std::io::Result<Self> {
         Ok(Self {
             list: TcpListener::bind(a)?,
             cfg: Arc::new(cfg),
+            read_timeout,
+            write_timeout,
+            tcp_nodelay,
         })
     }
 }
@@ -36,6 +49,12 @@ impl Acceptor for RustlsAcceptor {
 
     fn accept(&self) -> crate::Result<Self::Transport> {
         let (mut sock, _) = self.list.accept()?;
+        configure_stream(
+            &sock,
+            self.read_timeout,
+            self.write_timeout,
+            self.tcp_nodelay,
+        )?;
         let mut conn = ServerConnection::new(self.cfg.clone())?;
         conn.complete_io(&mut sock)?;
         Ok(StreamOwned::new(conn, sock))
@@ -64,6 +83,12 @@ impl AcceptorBuilder<Ready> {
                 PrivateKeyDer::from_pem_slice(key)?,
             )?;
 
-        Ok(RustlsAcceptor::new(cfg, addr)?)
+        Ok(RustlsAcceptor::new(
+            cfg,
+            addr,
+            self.read_timeout,
+            self.write_timeout,
+            self.tcp_nodelay,
+        )?)
     }
 }
