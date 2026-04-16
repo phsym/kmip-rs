@@ -23,7 +23,7 @@ serde = ["dep:serde", "dep:serde_with", "dep:cfg_eval"]
 bitflags = ["dep:bitflags"]
 
 [dependencies]
-ttlv-derive = { path = "../ttlv-derive", optional = true }
+ttlv-derive = { version = "*", path = "../ttlv-derive", optional = true }
 
 task-local-extensions = "0.1"
 

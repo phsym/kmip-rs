@@ -36,7 +36,7 @@ uuid = ["dep:uuid"]
 _integration_tests = ["interop-rust-crypto"]
 
 [dependencies]
-ttlv = { path = "../ttlv" }
+ttlv = { version = "*", path = "../ttlv" }
 
 thiserror = "2"
 anyhow = "1"
