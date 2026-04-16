@@ -98,16 +98,22 @@ impl ClientBuilder {
         self
     }
 
+    /// Sets the read timeout applied to the underlying `TcpStream` before the
+    /// TLS handshake. `None` disables the timeout (reads block indefinitely).
     pub fn read_timeout(&mut self, timeout: Option<Duration>) -> &mut Self {
         self.read_timeout = timeout;
         self
     }
 
+    /// Sets the write timeout applied to the underlying `TcpStream` before the
+    /// TLS handshake. `None` disables the timeout (writes block indefinitely).
     pub fn write_timeout(&mut self, timeout: Option<Duration>) -> &mut Self {
         self.write_timeout = timeout;
         self
     }
 
+    /// Enables or disables `TCP_NODELAY` (Nagle's algorithm) on the underlying
+    /// socket. Enabled by default to minimize request/response latency.
     pub fn tcp_nodelay(&mut self, nodelay: bool) -> &mut Self {
         self.tcp_nodelay = nodelay;
         self
@@ -396,5 +402,76 @@ where
 impl CorrelationValueMiddleware<fn() -> uuid::Uuid> {
     pub fn uuid() -> Self {
         Self::new(uuid::Uuid::new_v4)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn test_client_builder_defaults() {
+        let builder = ClientBuilder::new();
+        assert_eq!(builder.read_timeout, Some(Duration::from_secs(30)));
+        assert_eq!(builder.write_timeout, Some(Duration::from_secs(30)));
+        assert!(builder.tcp_nodelay);
+    }
+
+    #[test]
+    fn test_client_builder_custom_timeouts() {
+        let mut builder = ClientBuilder::new();
+        builder
+            .read_timeout(Some(Duration::from_secs(10)))
+            .write_timeout(Some(Duration::from_secs(60)))
+            .tcp_nodelay(false);
+
+        assert_eq!(builder.read_timeout, Some(Duration::from_secs(10)));
+        assert_eq!(builder.write_timeout, Some(Duration::from_secs(60)));
+        assert!(!builder.tcp_nodelay);
+    }
+
+    #[test]
+    fn test_client_builder_disable_timeouts() {
+        let mut builder = ClientBuilder::new();
+        builder.read_timeout(None).write_timeout(None);
+
+        assert_eq!(builder.read_timeout, None);
+        assert_eq!(builder.write_timeout, None);
+    }
+
+    #[test]
+    fn test_configure_stream_applies_settings() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        configure_stream(
+            &stream,
+            Some(Duration::from_secs(5)),
+            Some(Duration::from_secs(10)),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(stream.read_timeout().unwrap(), Some(Duration::from_secs(5)));
+        assert_eq!(
+            stream.write_timeout().unwrap(),
+            Some(Duration::from_secs(10))
+        );
+        assert!(stream.nodelay().unwrap());
+    }
+
+    #[test]
+    fn test_configure_stream_no_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        configure_stream(&stream, None, None, false).unwrap();
+
+        assert_eq!(stream.read_timeout().unwrap(), None);
+        assert_eq!(stream.write_timeout().unwrap(), None);
+        assert!(!stream.nodelay().unwrap());
     }
 }

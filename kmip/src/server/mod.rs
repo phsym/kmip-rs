@@ -124,16 +124,22 @@ impl<T> AcceptorBuilder<T> {
         self
     }
 
+    /// Sets the read timeout applied to accepted `TcpStream`s before the TLS
+    /// handshake. `None` disables the timeout (reads block indefinitely).
     pub fn read_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.read_timeout = timeout;
         self
     }
 
+    /// Sets the write timeout applied to accepted `TcpStream`s before the TLS
+    /// handshake. `None` disables the timeout (writes block indefinitely).
     pub fn write_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.write_timeout = timeout;
         self
     }
 
+    /// Enables or disables `TCP_NODELAY` (Nagle's algorithm) on accepted
+    /// sockets. Enabled by default to minimize request/response latency.
     pub fn tcp_nodelay(mut self, nodelay: bool) -> Self {
         self.tcp_nodelay = nodelay;
         self
@@ -143,7 +149,7 @@ impl<T> AcceptorBuilder<T> {
     // TODO: Fine tune TLS cipher suites when/if possible
 }
 
-#[allow(dead_code)]
+#[cfg(any(feature = "tls-rustls", feature = "tls-openssl"))]
 pub(crate) fn configure_stream(
     stream: &TcpStream,
     read_timeout: Option<Duration>,
@@ -249,5 +255,90 @@ impl<A: Acceptor + 'static, H: RequestHandler + 'static> Server<A, H> {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_acceptor_builder_defaults() {
+        let builder = AcceptorBuilder::new();
+        assert_eq!(builder.read_timeout, Some(Duration::from_secs(30)));
+        assert_eq!(builder.write_timeout, Some(Duration::from_secs(30)));
+        assert!(builder.tcp_nodelay);
+    }
+
+    #[test]
+    fn test_acceptor_builder_custom_timeouts() {
+        let builder = AcceptorBuilder::new()
+            .read_timeout(Some(Duration::from_secs(15)))
+            .write_timeout(Some(Duration::from_secs(45)))
+            .tcp_nodelay(false);
+
+        assert_eq!(builder.read_timeout, Some(Duration::from_secs(15)));
+        assert_eq!(builder.write_timeout, Some(Duration::from_secs(45)));
+        assert!(!builder.tcp_nodelay);
+    }
+
+    #[test]
+    fn test_acceptor_builder_disable_timeouts() {
+        let builder = AcceptorBuilder::new()
+            .read_timeout(None)
+            .write_timeout(None);
+
+        assert_eq!(builder.read_timeout, None);
+        assert_eq!(builder.write_timeout, None);
+    }
+
+    #[test]
+    fn test_acceptor_builder_identity_preserves_socket_opts() {
+        let builder = AcceptorBuilder::new()
+            .read_timeout(Some(Duration::from_secs(10)))
+            .write_timeout(Some(Duration::from_secs(20)))
+            .tcp_nodelay(false)
+            .identity(b"cert".to_vec(), b"key".to_vec());
+
+        assert_eq!(builder.read_timeout, Some(Duration::from_secs(10)));
+        assert_eq!(builder.write_timeout, Some(Duration::from_secs(20)));
+        assert!(!builder.tcp_nodelay);
+    }
+
+    #[cfg(any(feature = "tls-rustls", feature = "tls-openssl"))]
+    #[test]
+    fn test_configure_stream_applies_settings() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        configure_stream(
+            &stream,
+            Some(Duration::from_secs(5)),
+            Some(Duration::from_secs(10)),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(stream.read_timeout().unwrap(), Some(Duration::from_secs(5)));
+        assert_eq!(
+            stream.write_timeout().unwrap(),
+            Some(Duration::from_secs(10))
+        );
+        assert!(stream.nodelay().unwrap());
+    }
+
+    #[cfg(any(feature = "tls-rustls", feature = "tls-openssl"))]
+    #[test]
+    fn test_configure_stream_no_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        configure_stream(&stream, None, None, false).unwrap();
+
+        assert_eq!(stream.read_timeout().unwrap(), None);
+        assert_eq!(stream.write_timeout().unwrap(), None);
+        assert!(!stream.nodelay().unwrap());
     }
 }
