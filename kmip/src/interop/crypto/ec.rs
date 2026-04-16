@@ -6,34 +6,36 @@ use elliptic_curve::{
 };
 use pkcs8::AssociatedOid;
 
-use ttlv::BigInteger;
-use typenum::Unsigned;
-
 use crate::{
     CryptographicAlgorithm, KeyCompressionType, KeyError, KeyFormatType, KeyMaterial, Object,
     PrivateKey, PublicKey, RecommendedCurve, ToKeyMaterial, TransparentECPrivateKey,
     TransparentECPublicKey,
 };
+use ttlv::BigInteger;
 
 use super::super::{FormatEcPrivate, FormatEcPublic, FromObject};
 
 trait CurveExt {
     const RECOMMENDED_CURVE: RecommendedCurve;
+    const CRYPTOGRAPHIC_LENGTH: i32;
 }
 
 #[cfg(feature = "interop-p256")]
 impl CurveExt for p256::NistP256 {
     const RECOMMENDED_CURVE: RecommendedCurve = RecommendedCurve::P256;
+    const CRYPTOGRAPHIC_LENGTH: i32 = 256;
 }
 
 #[cfg(feature = "interop-p384")]
 impl CurveExt for p384::NistP384 {
     const RECOMMENDED_CURVE: RecommendedCurve = RecommendedCurve::P384;
+    const CRYPTOGRAPHIC_LENGTH: i32 = 384;
 }
 
 #[cfg(feature = "interop-p521")]
 impl CurveExt for p521::NistP521 {
     const RECOMMENDED_CURVE: RecommendedCurve = RecommendedCurve::P521;
+    const CRYPTOGRAPHIC_LENGTH: i32 = 521;
 }
 
 impl<C> ToKeyMaterial<PublicKey> for elliptic_curve::PublicKey<C>
@@ -59,7 +61,7 @@ where
     }
 
     fn cryptographic_length(&self) -> i32 {
-        C::FieldBytesSize::I32 * 8
+        C::CRYPTOGRAPHIC_LENGTH
     }
 }
 
@@ -98,7 +100,7 @@ where
     }
 
     fn cryptographic_length(&self) -> i32 {
-        C::FieldBytesSize::I32 * 8
+        C::CRYPTOGRAPHIC_LENGTH
     }
 }
 

@@ -26,7 +26,7 @@ interop-boring = ["dep:boring"]
 
 interop-rust-crypto = ["interop-rsa", "interop-p256", "interop-p384", "interop-p521"]
 interop-rsa = ["dep:rsa"]
-_interop-elliptic-curve = ["dep:elliptic-curve", "dep:typenum", "dep:sec1", "dep:pkcs8"]
+_interop-elliptic-curve = ["dep:elliptic-curve", "dep:sec1", "dep:pkcs8"]
 interop-p256 = ["dep:p256", "_interop-elliptic-curve"]
 interop-p384 = ["dep:p384", "_interop-elliptic-curve"]
 interop-p521 = ["dep:p521", "_interop-elliptic-curve"]
@@ -68,7 +68,6 @@ p521 = { version = "0.13", default-features = false, features = ["arithmetic", "
 elliptic-curve = { version = "0.13", default-features = false, features = ["std", "pkcs8", "sec1", "arithmetic"], optional = true }
 pkcs8 = { version = "0.10", default-features = false, optional = true }
 sec1 = { version = "0.7", default-features = false, optional = true }
-typenum = { version = "1", default-features = false, optional = true }
 
 [dev-dependencies]
 # kmip = { path = ".", features = ["interop-rust-crypto"] }
