@@ -6,7 +6,7 @@ use std::{
 
 use boring::{
     pkey::PKey,
-    ssl::{HandshakeError, SslConnector, SslMethod, SslStream},
+    ssl::{HandshakeError, SslConnector, SslMethod, SslStream, SslVerifyMode},
     x509::X509,
 };
 
@@ -41,6 +41,7 @@ impl ClientBuilder {
             bld.set_private_key(PKey::private_key_from_pem(key)?.as_ref())?;
         }
 
+        bld.set_verify(SslVerifyMode::PEER);
         Client::new(BoringSslConnector::new(bld.build(), addr, domain)?)
     }
 }
