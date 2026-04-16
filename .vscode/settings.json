@@ -1,9 +1,7 @@
 {
     "rust-analyzer.cargo.features": [
-        "pkcs11",
         "_integration_tests",
         "arbitrary",
     ],
-    "rust-analyzer.cargo.targetDir": "rls-target",
     "evenBetterToml.formatter.columnWidth": 150
 }

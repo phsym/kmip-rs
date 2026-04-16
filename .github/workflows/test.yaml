@@ -24,9 +24,9 @@ jobs:
     - uses: ./.github/actions/setup-build-env
 
     - name: Build
-      run: cargo build --verbose --features "${{ matrix.features }}" --locked
+      run: cargo build --verbose --features "${{ matrix.features }}"
     - name: Run tests
-      run: cargo test --verbose --features "${{ matrix.features }}" --locked
+      run: cargo test --verbose --features "${{ matrix.features }}"
   
   lint:
     runs-on: ubuntu-latest
@@ -36,6 +36,6 @@ jobs:
     - name: Check formatting
       run: cargo fmt --check --all
     - name: Run Cargo check
-      run: cargo check --all --all-features --all-targets --locked
+      run: cargo check --all --all-features --all-targets
     - name: Run Clippy linter
-      run: cargo clippy --all --all-features --all-targets --locked -- -D clippy::all
+      run: cargo clippy --all --all-features --all-targets -- -D clippy::all
