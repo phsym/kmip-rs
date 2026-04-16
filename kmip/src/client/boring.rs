@@ -18,7 +18,7 @@ pub type BoringSsl = SslStream<TcpStream>;
 
 impl ClientBuilder {
     pub fn connect_boring(&self, addr: impl ToSocketAddrs, domain: &str) -> Result<Client> {
-        let mut bld = SslConnector::builder(SslMethod::tls_client())?;
+        let mut bld = SslConnector::builder(SslMethod::tls())?;
 
         for root in &self.root_certs {
             let certs = X509::stack_from_pem(root)?;
