@@ -61,6 +61,12 @@ impl KeyMaterial {
             // KeyFormatType::TransparentECDHPublicKey => todo!(),
             // KeyFormatType::TransparentECMQVPrivateKey => todo!(),
             // KeyFormatType::TransparentECMQVPublicKey => todo!(),
+            KeyFormatType::TransparentECPrivateKey => {
+                Self::TransparentECPrivateKey(decoder.decode()?)
+            }
+            KeyFormatType::TransparentECPublicKey => {
+                Self::TransparentECPublicKey(decoder.decode()?)
+            }
             _ => Self::Other(decoder.tag_decode(Tags::KeyMaterial)?),
         })
     }
