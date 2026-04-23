@@ -129,7 +129,29 @@ impl RequestHandler for Router {
             },
             batch_item: Vec::with_capacity(req.batch_item.len()),
         };
-        //TODO: Check if batch item count match the batch item length
+        // Per the KMIP spec, the `batch_count` header must equal the actual
+        // number of batch items. A mismatch is a protocol violation and must
+        // be reported as `InvalidMessage`.
+        if req.header.batch_count < 0 || (req.header.batch_count as usize) != req.batch_item.len() {
+            error!(
+                batch_count = req.header.batch_count,
+                batch_item_len = req.batch_item.len(),
+                "batch_count header does not match batch_item length"
+            );
+            resp.header.batch_count = 1;
+            resp.batch_item.clear();
+            resp.batch_item.push(ResponseBatchItem {
+                operation: None,
+                response_payload: None,
+                unique_batch_item_id: None,
+                result_status: ResultStatus::OperationFailed,
+                result_reason: Some(ResultReason::InvalidMessage),
+                result_message: Some("batch_count does not match batch_item length".to_string()),
+                asynchronous_correlation_value: None,
+                message_extension: None,
+            });
+            return resp;
+        }
         for bi in req.batch_item {
             let _sp = error_span!("batch-item", operation = %bi.operation).entered(); //TODO: Add batch-item id
             debug!("processing batch-item");
@@ -154,5 +176,110 @@ impl RequestHandler for Router {
             resp.batch_item.push(rbi);
         }
         resp
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DiscoverVersionsRequestPayload, ProtocolVersion, RequestBatchItem, RequestHeader};
+
+    fn make_request(batch_count: i32, item_count: usize) -> RequestMessage {
+        let items: Vec<RequestBatchItem> = (0..item_count)
+            .map(|_| {
+                RequestBatchItem::new(
+                    DiscoverVersionsRequestPayload {
+                        protocol_version: vec![],
+                    },
+                    None,
+                )
+            })
+            .collect();
+        RequestMessage {
+            header: RequestHeader {
+                protocol_version: ProtocolVersion::V1_4,
+                batch_count,
+                asynchronous_indicator: None,
+                authentication: None,
+                maximum_response_size: None,
+                batch_error_continuation_option: None,
+                batch_order_option: None,
+                timestamp: Some(chrono::Local::now()),
+                attestation_capable_indicator: None,
+                attestation_type: None,
+                client_correlation_value: None,
+                server_correlation_value: None,
+            },
+            batch_item: items,
+        }
+    }
+
+    #[test]
+    fn router_rejects_batch_count_greater_than_items() {
+        let router = Router::new();
+        let req = make_request(2, 1);
+        let resp = router.handle(req);
+        assert_eq!(resp.batch_item.len(), 1);
+        let bi = &resp.batch_item[0];
+        assert_eq!(bi.result_status, ResultStatus::OperationFailed);
+        assert_eq!(bi.result_reason, Some(ResultReason::InvalidMessage));
+        assert_eq!(bi.operation, None);
+    }
+
+    #[test]
+    fn router_rejects_batch_count_less_than_items() {
+        let router = Router::new();
+        let req = make_request(1, 3);
+        let resp = router.handle(req);
+        assert_eq!(resp.batch_item.len(), 1);
+        assert_eq!(
+            resp.batch_item[0].result_status,
+            ResultStatus::OperationFailed
+        );
+        assert_eq!(
+            resp.batch_item[0].result_reason,
+            Some(ResultReason::InvalidMessage)
+        );
+    }
+
+    #[test]
+    fn router_rejects_negative_batch_count() {
+        let router = Router::new();
+        let req = make_request(-1, 0);
+        let resp = router.handle(req);
+        assert_eq!(resp.batch_item.len(), 1);
+        assert_eq!(
+            resp.batch_item[0].result_status,
+            ResultStatus::OperationFailed
+        );
+        assert_eq!(
+            resp.batch_item[0].result_reason,
+            Some(ResultReason::InvalidMessage)
+        );
+    }
+
+    #[test]
+    fn router_accepts_matching_batch_count() {
+        // No route is registered, so batch items will get OperationNotSupported,
+        // but the batch_count validation must pass (it happens before per-item
+        // handling).
+        let router = Router::new();
+        let req = make_request(2, 2);
+        let resp = router.handle(req);
+        assert_eq!(resp.header.batch_count, 2);
+        assert_eq!(resp.batch_item.len(), 2);
+        for bi in &resp.batch_item {
+            assert_eq!(bi.result_status, ResultStatus::OperationFailed);
+            assert_eq!(bi.result_reason, Some(ResultReason::OperationNotSupported));
+        }
+    }
+
+    #[test]
+    fn router_accepts_zero_batch_count_with_zero_items() {
+        let router = Router::new();
+        let req = make_request(0, 0);
+        let resp = router.handle(req);
+        assert_eq!(resp.header.batch_count, 0);
+        assert!(resp.batch_item.is_empty());
     }
 }

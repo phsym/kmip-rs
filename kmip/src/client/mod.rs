@@ -254,17 +254,18 @@ impl Client {
     }
 
     pub fn roundtrip(&mut self, msg: &RequestMessage) -> Result<ResponseMessage> {
-        Next {
+        let resp = Next {
             idx: 0,
             client: self,
         }
-        .run(msg)
+        .run(msg)?;
+        validate_batch_count(&resp)?;
+        Ok(resp)
     }
 
     pub fn request<R: Request>(&mut self, pl: R) -> Result<R::Response> {
         let msg = RequestMessage::new(self.version()?, pl);
         let resp = self.roundtrip(&msg)?;
-        // TODO: Check batch item count
         resp.batch_item
             .into_iter()
             .next()
@@ -287,7 +288,6 @@ impl Client {
         msg.header.batch_error_continuation_option = cont;
 
         let resp = self.roundtrip(&msg)?;
-        // TODO: Check batch item count
         Ok(ResponseBatchIter(resp.batch_item.into_iter()))
     }
 
@@ -320,6 +320,18 @@ impl Iterator for ResponseBatchIter {
         let next = self.0.next()?;
         Some(next.success().map_err(Into::into))
     }
+}
+
+/// Validates that the `batch_count` field in a response header matches the
+/// actual number of batch items in the message, as required by the KMIP spec.
+#[inline]
+fn validate_batch_count(resp: &ResponseMessage) -> Result<()> {
+    let expected = resp.header.batch_count;
+    let got = resp.batch_item.len();
+    if expected < 0 || (expected as usize) != got {
+        return Err(Error::BatchCountMismatch { expected, got });
+    }
+    Ok(())
 }
 
 pub trait Middleware: Send + Sync {
@@ -473,5 +485,80 @@ mod tests {
         assert_eq!(stream.read_timeout().unwrap(), None);
         assert_eq!(stream.write_timeout().unwrap(), None);
         assert!(!stream.nodelay().unwrap());
+    }
+
+    fn make_response(batch_count: i32, item_count: usize) -> ResponseMessage {
+        let items: Vec<ResponseBatchItem> = (0..item_count)
+            .map(|_| ResponseBatchItem {
+                operation: None,
+                response_payload: None,
+                unique_batch_item_id: None,
+                result_status: crate::ResultStatus::Success,
+                result_reason: None,
+                result_message: None,
+                asynchronous_correlation_value: None,
+                message_extension: None,
+            })
+            .collect();
+        ResponseMessage {
+            header: crate::ResponseHeader {
+                protocol_version: ProtocolVersion::V1_4,
+                timestamp: chrono::Local::now(),
+                nonce: None,
+                attestation_type: None,
+                client_correlation_value: None,
+                server_correlation_value: None,
+                batch_count,
+            },
+            batch_item: items,
+        }
+    }
+
+    #[test]
+    fn validate_batch_count_matches() {
+        let resp = make_response(2, 2);
+        assert!(validate_batch_count(&resp).is_ok());
+    }
+
+    #[test]
+    fn validate_batch_count_zero_empty() {
+        let resp = make_response(0, 0);
+        assert!(validate_batch_count(&resp).is_ok());
+    }
+
+    #[test]
+    fn validate_batch_count_header_too_large() {
+        let resp = make_response(3, 1);
+        match validate_batch_count(&resp) {
+            Err(Error::BatchCountMismatch {
+                expected: 3,
+                got: 1,
+            }) => {}
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_batch_count_header_too_small() {
+        let resp = make_response(1, 4);
+        match validate_batch_count(&resp) {
+            Err(Error::BatchCountMismatch {
+                expected: 1,
+                got: 4,
+            }) => {}
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_batch_count_negative_header() {
+        let resp = make_response(-1, 0);
+        match validate_batch_count(&resp) {
+            Err(Error::BatchCountMismatch {
+                expected: -1,
+                got: 0,
+            }) => {}
+            other => panic!("unexpected result: {other:?}"),
+        }
     }
 }

@@ -18,6 +18,8 @@ pub enum Error {
     KMIP(#[from] ProtocolError),
     #[error("A KMIP batch item is missing")]
     MissingBatchItem,
+    #[error("Batch count mismatch (expected: {expected}, got: {got})")]
+    BatchCountMismatch { expected: i32, got: usize },
     #[error("The payload is missing from the response")]
     MissingResponsePayload,
     #[error("Unexpected response payload (want: {want})")]
