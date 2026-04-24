@@ -66,7 +66,7 @@ fn derive_struct(data: DataStruct, ident: Ident, struct_attr: StructAttr) -> Res
                     quote_spanned! {field_ident.span() => let #var: #ty = d.tag_decode(#tag)?}
                 }
                 CallMode::Flatten => {
-                    quote_spanned! {field_ident.span() => let #var: #ty = d.flatten_decode()?}
+                    quote_spanned! {field_ident.span() => let #var: #ty = <#ty>::flatten_decode(d)?}
                 }
             };
 

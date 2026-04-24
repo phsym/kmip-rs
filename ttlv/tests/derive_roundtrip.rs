@@ -263,3 +263,44 @@ fn test_empty_vec_roundtrip() {
 
     assert_eq!(original, decoded);
 }
+
+// -- Field-level `#[ttlv(flatten)]` round-trip --
+// Inlines the inner struct's fields into the outer's TTLV body, without
+// emitting a nested struct wrapper for the inner.
+
+#[derive(Debug, PartialEq, Encodable, Decodable)]
+#[ttlv(tag = 0x420090)]
+struct FlattenedInner {
+    #[ttlv(tag = 0x420091)]
+    a: i32,
+    #[ttlv(tag = 0x420092)]
+    b: String,
+}
+
+#[derive(Debug, PartialEq, Encodable, Decodable)]
+#[ttlv(tag = 0x420093)]
+struct FlattenedOuter {
+    #[ttlv(flatten)]
+    inner: FlattenedInner,
+    #[ttlv(tag = 0x420094)]
+    extra: i32,
+}
+
+#[test]
+fn test_field_flatten_roundtrip() {
+    let original = FlattenedOuter {
+        inner: FlattenedInner {
+            a: 7,
+            b: "flat".into(),
+        },
+        extra: 42,
+    };
+
+    let mut enc = TtlvEncoder::new();
+    original.encode(&mut enc);
+
+    let mut dec = TtlvDecoder::new(enc.bytes());
+    let decoded = FlattenedOuter::decode(&mut dec).unwrap();
+
+    assert_eq!(original, decoded);
+}
