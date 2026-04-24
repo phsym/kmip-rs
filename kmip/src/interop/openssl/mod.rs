@@ -6,7 +6,7 @@ use openssl::{
 
 use crate::{CryptographicAlgorithm, KeyFormatType, PrivateKey, PublicKey};
 
-use super::{FormatPrivate, FormatPublic, FromObject, ToObject};
+use super::{FormatPrivate, FormatPublic, FromObject, KeyError, ToObject};
 
 mod ec;
 mod rsa;
@@ -18,11 +18,11 @@ impl ToObject<PrivateKey> for PKey<Private> {
         &self,
         format: Self::Format,
         vers: crate::ProtocolVersion,
-    ) -> Result<PrivateKey, super::KeyError> {
+    ) -> Result<PrivateKey, KeyError> {
         match self.id() {
             Id::RSA => self.rsa()?.to_kmip_object(format.into(), vers),
             Id::EC => self.ec_key()?.to_kmip_object(format.into(), vers),
-            _ => Err("unsupported key type".into()),
+            _ => Err(KeyError::UnsupportedKeyType),
         }
     }
 }
@@ -34,17 +34,17 @@ impl ToObject<PublicKey> for PKey<Public> {
         &self,
         format: Self::Format,
         vers: crate::ProtocolVersion,
-    ) -> Result<PublicKey, super::KeyError> {
+    ) -> Result<PublicKey, KeyError> {
         match self.id() {
             Id::RSA => self.rsa()?.to_kmip_object(format.into(), vers),
             Id::EC => self.ec_key()?.to_kmip_object(format.into(), vers),
-            _ => Err("unsupported key type".into()),
+            _ => Err(KeyError::UnsupportedKeyType),
         }
     }
 }
 
 impl FromObject<PublicKey> for PKey<Public> {
-    fn from_kmip_object(object: crate::Object) -> Result<Self, super::KeyError> {
+    fn from_kmip_object(object: crate::Object) -> Result<Self, KeyError> {
         let pubkey = <&PublicKey>::try_from(&object)?;
         match pubkey.key_block.cryptographic_algorithm {
             Some(CryptographicAlgorithm::RSA) => {
@@ -60,7 +60,7 @@ impl FromObject<PublicKey> for PKey<Public> {
                     pubkey
                         .key_block
                         .try_as_bytes()
-                        .ok_or("invalid key material")?,
+                        .ok_or(KeyError::InvalidKeyMaterial)?,
                 )?),
                 KeyFormatType::PKCS1 | KeyFormatType::TransparentRSAPublicKey => {
                     Ok(PKey::from_rsa(Rsa::<Public>::from_kmip_object(object)?)?)
@@ -70,15 +70,15 @@ impl FromObject<PublicKey> for PKey<Public> {
                 | KeyFormatType::TransparentECDSAPublicKey => Ok(PKey::from_ec_key(
                     EcKey::<Public>::from_kmip_object(object)?,
                 )?),
-                _ => Err("invalid key format".into()),
+                other => Err(KeyError::UnsupportedKeyFormat(other)),
             },
-            _ => Err("invalid or unsupported cryptographic algorithm".into()),
+            _ => Err(KeyError::UnsupportedCryptographicAlgorithm),
         }
     }
 }
 
 impl FromObject<PrivateKey> for PKey<Private> {
-    fn from_kmip_object(object: crate::Object) -> Result<Self, super::KeyError> {
+    fn from_kmip_object(object: crate::Object) -> Result<Self, KeyError> {
         let privkey = <&PrivateKey>::try_from(&object)?;
 
         match privkey.key_block.cryptographic_algorithm {
@@ -95,7 +95,7 @@ impl FromObject<PrivateKey> for PKey<Private> {
                     privkey
                         .key_block
                         .try_as_bytes()
-                        .ok_or("invalid key material")?,
+                        .ok_or(KeyError::InvalidKeyMaterial)?,
                 )?),
                 #[allow(deprecated, reason = "legacy support")]
                 KeyFormatType::ECPrivateKey
@@ -106,9 +106,9 @@ impl FromObject<PrivateKey> for PKey<Private> {
                 KeyFormatType::PKCS1 | KeyFormatType::TransparentRSAPrivateKey => {
                     Ok(PKey::from_rsa(Rsa::<Private>::from_kmip_object(object)?)?)
                 }
-                _ => Err("invalid key format".into()),
+                other => Err(KeyError::UnsupportedKeyFormat(other)),
             },
-            _ => Err("invalid or unsupported cryptographic algorithm".into()),
+            _ => Err(KeyError::UnsupportedCryptographicAlgorithm),
         }
     }
 }

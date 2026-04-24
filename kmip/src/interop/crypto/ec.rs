@@ -115,24 +115,32 @@ where
         let kb = pkey.key_block;
         match kb.cryptographic_algorithm {
             None | Some(CryptographicAlgorithm::EC | CryptographicAlgorithm::ECDSA) => {}
-            _ => return Err("Invalid algorithm".into()),
+            got => {
+                return Err(KeyError::InvalidAlgorithm {
+                    expected: "EC or ECDSA",
+                    got,
+                });
+            }
         }
 
-        let mat = kb.as_plain_material().ok_or("Invalid key material")?;
+        let mat = kb.as_plain_material().ok_or(KeyError::InvalidKeyMaterial)?;
         match mat {
             #[allow(deprecated, reason = "For backward compatibility")]
             KeyMaterial::TransparentECPublicKey(pkey)
             | KeyMaterial::TransparentECDSAPublicKey(pkey) => {
                 if pkey.recommended_curve != C::RECOMMENDED_CURVE {
-                    return Err("Recommended curve mismatch".into());
+                    return Err(KeyError::CurveMismatch {
+                        expected: C::RECOMMENDED_CURVE,
+                        got: pkey.recommended_curve,
+                    });
                 }
                 Ok(Self::from_sec1_bytes(&pkey.q_string)?)
             }
             KeyMaterial::Bytes(bytes) => match kb.key_format_type {
                 KeyFormatType::X509 => Ok(Self::from_public_key_der(bytes)?),
-                _ => Err("Invalid key format".into()),
+                other => Err(KeyError::UnsupportedKeyFormat(other)),
             },
-            _ => Err("Invalid key value".into()),
+            _ => Err(KeyError::InvalidKeyValue),
         }
     }
 }
@@ -148,25 +156,33 @@ where
         let kb = pkey.key_block;
         match kb.cryptographic_algorithm {
             None | Some(CryptographicAlgorithm::EC | CryptographicAlgorithm::ECDSA) => {}
-            _ => return Err("Invalid algorithm".into()),
+            got => {
+                return Err(KeyError::InvalidAlgorithm {
+                    expected: "EC or ECDSA",
+                    got,
+                });
+            }
         }
 
-        let mat = kb.as_plain_material().ok_or("Invalid key material")?;
+        let mat = kb.as_plain_material().ok_or(KeyError::InvalidKeyMaterial)?;
         match mat {
             #[allow(deprecated, reason = "For backward compatibility")]
             KeyMaterial::TransparentECPrivateKey(pkey)
             | KeyMaterial::TransparentECDSAPrivateKey(pkey) => {
                 if pkey.recommended_curve != C::RECOMMENDED_CURVE {
-                    return Err("Recommended curve mismatch".into());
+                    return Err(KeyError::CurveMismatch {
+                        expected: C::RECOMMENDED_CURVE,
+                        got: pkey.recommended_curve,
+                    });
                 };
                 Ok(Self::from_bytes(GenericArray::from_slice(&pkey.d))?)
             }
             KeyMaterial::Bytes(bytes) => match kb.key_format_type {
                 KeyFormatType::PKCS8 => Ok(Self::from_pkcs8_der(bytes)?),
                 KeyFormatType::ECPrivateKey => Ok(Self::from_sec1_der(bytes)?),
-                _ => Err("Invalid key format".into()),
+                other => Err(KeyError::UnsupportedKeyFormat(other)),
             },
-            _ => Err("Invalid key value".into()),
+            _ => Err(KeyError::InvalidKeyValue),
         }
     }
 }

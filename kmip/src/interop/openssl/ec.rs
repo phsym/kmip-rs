@@ -23,7 +23,7 @@ impl TryFrom<RecommendedCurve> for Nid {
             RecommendedCurve::P256 => Nid::X9_62_PRIME256V1,
             RecommendedCurve::P384 => Nid::SECP384R1,
             RecommendedCurve::P521 => Nid::SECP521R1,
-            _ => return Err("unsupported curve".into()),
+            _ => return Err(KeyError::UnsupportedCurve(value)),
         })
     }
 }
@@ -36,7 +36,7 @@ impl TryFrom<Nid> for RecommendedCurve {
             Nid::X9_62_PRIME256V1 => RecommendedCurve::P256,
             Nid::SECP384R1 => RecommendedCurve::P384,
             Nid::SECP521R1 => RecommendedCurve::P521,
-            _ => return Err("unsupported curve".into()),
+            _ => return Err(KeyError::UnsupportedCurveNid),
         })
     }
 }
@@ -44,7 +44,7 @@ impl TryFrom<Nid> for RecommendedCurve {
 impl TryFrom<Option<Nid>> for RecommendedCurve {
     type Error = KeyError;
     fn try_from(value: Option<Nid>) -> Result<Self, Self::Error> {
-        value.ok_or::<KeyError>("missing curve".into())?.try_into()
+        value.ok_or(KeyError::MissingCurve)?.try_into()
     }
 }
 
@@ -104,10 +104,15 @@ impl FromObject<PublicKey> for EcKey<Public> {
 
         match kb.cryptographic_algorithm {
             None | Some(CryptographicAlgorithm::EC | CryptographicAlgorithm::ECDSA) => {}
-            _ => return Err("Invalid algorithm".into()),
+            got => {
+                return Err(KeyError::InvalidAlgorithm {
+                    expected: "EC or ECDSA",
+                    got,
+                });
+            }
         }
 
-        let mat = kb.as_plain_material().ok_or("Invalid key material")?;
+        let mat = kb.as_plain_material().ok_or(KeyError::InvalidKeyMaterial)?;
         match mat {
             #[allow(deprecated, reason = "For backward compatibility")]
             KeyMaterial::TransparentECPublicKey(pkey)
@@ -122,9 +127,9 @@ impl FromObject<PublicKey> for EcKey<Public> {
             }
             KeyMaterial::Bytes(bytes) => match kb.key_format_type {
                 KeyFormatType::X509 => Ok(EcKey::public_key_from_der(bytes)?),
-                _ => Err("Invalid key format".into()),
+                other => Err(KeyError::UnsupportedKeyFormat(other)),
             },
-            _ => Err("Invalid key value".into()),
+            _ => Err(KeyError::InvalidKeyValue),
         }
     }
 }
@@ -136,10 +141,15 @@ impl FromObject<PrivateKey> for EcKey<Private> {
 
         match kb.cryptographic_algorithm {
             None | Some(CryptographicAlgorithm::EC | CryptographicAlgorithm::ECDSA) => {}
-            _ => return Err("Invalid algorithm".into()),
+            got => {
+                return Err(KeyError::InvalidAlgorithm {
+                    expected: "EC or ECDSA",
+                    got,
+                });
+            }
         }
 
-        let mat = kb.as_plain_material().ok_or("Invalid key material")?;
+        let mat = kb.as_plain_material().ok_or(KeyError::InvalidKeyMaterial)?;
         match mat {
             #[allow(deprecated, reason = "For backward compatibility")]
             KeyMaterial::TransparentECPrivateKey(pkey)
@@ -153,9 +163,9 @@ impl FromObject<PrivateKey> for EcKey<Private> {
             KeyMaterial::Bytes(bytes) => match kb.key_format_type {
                 KeyFormatType::PKCS8 => Ok(PKey::private_key_from_pkcs8(bytes)?.ec_key()?),
                 KeyFormatType::ECPrivateKey => Ok(EcKey::private_key_from_der(bytes)?),
-                _ => Err("Invalid key format".into()),
+                other => Err(KeyError::UnsupportedKeyFormat(other)),
             },
-            _ => Err("Invalid key value".into()),
+            _ => Err(KeyError::InvalidKeyValue),
         }
     }
 }

@@ -37,7 +37,10 @@ impl GetResponsePayload {
     pub fn secret(&self) -> Result<&[u8], KeyError> {
         let secret: &SecretData = (&self.object).try_into()?;
         //TODO: Move this into the SecretData struct impl
-        Ok(secret.key_block.try_as_bytes().ok_or("Invalid KeyBlock")?)
+        secret
+            .key_block
+            .try_as_bytes()
+            .ok_or(KeyError::InvalidKeyBlock)
     }
 
     pub fn secret_str(&self) -> Result<&str, KeyError> {
@@ -69,11 +72,11 @@ impl GetResponsePayload {
         let kmat = key
             .key_block
             .as_plain_material()
-            .ok_or("unsupported wrapped block")?;
+            .ok_or(KeyError::UnsupportedWrappedBlock)?;
         match kmat {
             KeyMaterial::Bytes(bytes) => Ok(bytes),
             KeyMaterial::TransparentSymmetricKey(tk) => Ok(&tk.key),
-            _ => Err("Unsupported key materials".into()),
+            _ => Err(KeyError::UnsupportedKeyMaterial),
         }
     }
 }
