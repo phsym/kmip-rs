@@ -10,9 +10,8 @@ members = [
 [workspace.package]
 publish = false
 repository = "https://github.com/phsym/kmip-rs"
-homepage = "https://www.ovhcloud.com"
 rust-version = "1.93.0"
-authors = ["Pierre-Henri Symoneaux <pierre-henri.symoneaux@ovhcloud.com>"]
+authors = ["Pierre-Henri Symoneaux"]
 edition = "2024"
-version = "0.1.0"
+version = "0.2.0"
 license = "Unlicense"
