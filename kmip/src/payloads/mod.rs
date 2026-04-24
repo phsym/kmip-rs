@@ -1,10 +1,7 @@
-mod activate;
 mod add_attribute;
-mod archive_recover;
 mod create;
 mod create_keypair;
 mod delete_attribute;
-mod destroy;
 mod discover;
 mod encrypt_decrypt;
 mod get;
@@ -23,17 +20,56 @@ mod revoke;
 mod sign_verify;
 
 pub use {
-    activate::*, add_attribute::*, archive_recover::*, create::*, create_keypair::*,
-    delete_attribute::*, destroy::*, discover::*, encrypt_decrypt::*, get::*,
-    get_attribute_list::*, get_attributes::*, get_usage::*, import_export::*, locate::*,
-    modify_attribute::*, obtain_lease::*, query::*, register::*, rekey::*, rekey_keypair::*,
-    revoke::*, sign_verify::*,
+    add_attribute::*, create::*, create_keypair::*, delete_attribute::*, discover::*,
+    encrypt_decrypt::*, get::*, get_attribute_list::*, get_attributes::*, get_usage::*,
+    import_export::*, locate::*, modify_attribute::*, obtain_lease::*, query::*, register::*,
+    rekey::*, rekey_keypair::*, revoke::*, sign_verify::*,
 };
 
 use strum_macros::{EnumIs, EnumTryAs};
 use ttlv::{Decoder, Encodable, MaybeKnownTag, RawTag};
 
 use crate::{Operations, Tags};
+
+macro_rules! unique_identifier_request_payload {
+    ($name:ident) => {
+        #[cfg_attr(feature = "arbitrary", derive(::arbitrary::Arbitrary))]
+        #[cfg_attr(feature = "serde", derive(::serde::Serialize))]
+        #[derive(Debug, Clone, PartialEq, ::ttlv::Encodable, ::ttlv::Decodable)]
+        #[ttlv(tag = $crate::Tags::RequestPayload)]
+        pub struct $name {
+            #[ttlv(tag = $crate::Tags::UniqueIdentifier)]
+            pub unique_identifier: Option<String>,
+        }
+    };
+}
+
+macro_rules! unique_identifier_response_payload {
+    ($name:ident) => {
+        #[cfg_attr(feature = "arbitrary", derive(::arbitrary::Arbitrary))]
+        #[cfg_attr(feature = "serde", derive(::serde::Serialize))]
+        #[derive(Debug, Clone, PartialEq, ::ttlv::Encodable, ::ttlv::Decodable)]
+        #[ttlv(tag = $crate::Tags::ResponsePayload)]
+        pub struct $name {
+            #[ttlv(tag = $crate::Tags::UniqueIdentifier)]
+            pub unique_identifier: String,
+        }
+    };
+}
+
+pub(crate) use unique_identifier_request_payload;
+
+// Ops whose request AND response are id-only are declared here. Ops whose response
+// carries extra fields (GetAttributeList, ObtainLease) keep their own module and
+// invoke `unique_identifier_request_payload!` locally.
+unique_identifier_request_payload!(ActivateRequestPayload);
+unique_identifier_response_payload!(ActivateResponsePayload);
+unique_identifier_request_payload!(ArchiveRequestPayload);
+unique_identifier_response_payload!(ArchiveResponsePayload);
+unique_identifier_request_payload!(RecoverRequestPayload);
+unique_identifier_response_payload!(RecoverResponsePayload);
+unique_identifier_request_payload!(DestroyRequestPayload);
+unique_identifier_response_payload!(DestroyResponsePayload);
 
 pub trait Request: Into<RequestPayload> + TryFrom<RequestPayload, Error = crate::Error> {
     const OPERATION: Operations;
