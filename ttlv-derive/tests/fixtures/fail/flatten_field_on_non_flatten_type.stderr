@@ -1,0 +1,11 @@
+error[E0599]: no method named `flatten_encode` found for reference `&i32` in the current scope
+  --> tests/fixtures/fail/flatten_field_on_non_flatten_type.rs:12:9
+   |
+12 |     pub bad: i32,
+   |         ^^^ method not found in `&i32`
+
+error[E0599]: no function or associated item named `flatten_decode` found for type `i32` in the current scope
+  --> tests/fixtures/fail/flatten_field_on_non_flatten_type.rs:12:9
+   |
+12 |     pub bad: i32,
+   |         ^^^ function or associated item not found in `i32`
