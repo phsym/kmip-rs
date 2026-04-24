@@ -7,8 +7,9 @@
 //!    (called by parent types that have `#[ttlv(flatten)]` on this field).
 //! 3. **`Decodable` impl** — only when a `tag` attribute is present. Delegates to `tag_decode`.
 //!
-//! For flattened structs (`#[ttlv(flatten)]`), only a `Decodable` impl is generated
-//! (no `TagDecodable`, no `flatten_decode`).
+//! For flattened structs (`#[ttlv(flatten)]`), a `Decodable` impl plus the
+//! inherent `flatten_decode` helper are generated (no `TagDecodable`). The trait
+//! impl just delegates to `flatten_decode`.
 //!
 //! For TTLV enums (`#[ttlv(enum)]`), generates a `TagDecodable` impl that reads the enum
 //! value and matches it against variant discriminants (by number) and names (by string).
@@ -24,7 +25,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{quote, quote_spanned};
 use syn::{Data, DataEnum, DataStruct, DeriveInput, Error, Ident, Result, spanned::Spanned};
 
-use crate::fields::FieldInfo;
+use crate::fields::{FieldInfo, clone_bounds_where_clause};
 use crate::ttlv_enum::parse_ttlv_variants;
 use crate::{AttrExt, CallMode, EnumAttr, EnumEnumAttr, StructAttr};
 
@@ -50,6 +51,7 @@ fn derive_struct(data: DataStruct, ident: Ident, struct_attr: StructAttr) -> Res
 
     let mut stmts = Vec::new();
     let mut idents = Vec::new();
+    let mut set_ext_types = Vec::new();
     for f in &field_infos {
         let field_ident = &f.ident;
         if !f.skip {
@@ -87,7 +89,8 @@ fn derive_struct(data: DataStruct, ident: Ident, struct_attr: StructAttr) -> Res
                 call = quote! {
                     #call;
                     d.extensions().insert(#var.clone())
-                }
+                };
+                set_ext_types.push(f.ty.clone());
             }
 
             stmts.push(call);
@@ -97,15 +100,26 @@ fn derive_struct(data: DataStruct, ident: Ident, struct_attr: StructAttr) -> Res
         }
     }
 
+    let where_clause = clone_bounds_where_clause(&set_ext_types);
+
+    // The `where` clause lives on the inherent `flatten_decode` only. Keeping it off the
+    // trait-impl methods avoids E0276 ("impl has stricter requirements than trait") when
+    // a field type is not `Clone`; the trait impls just delegate into `flatten_decode`.
     let mut impls = if let CallMode::Flatten = struct_attr.call_mode {
         vec![quote! {
-            impl ::ttlv::Decodable for #ident {
-                fn decode(d: &mut impl ::ttlv::Decoder) -> ::ttlv::Result<Self> {
+            impl #ident {
+                pub fn flatten_decode<D: ::ttlv::Decoder>(d: &mut D) -> ::ttlv::Result<Self> #where_clause {
                     #(#stmts;) *
                     let res = Self {
                         #(#idents), *
                     };
                     Ok(res)
+                }
+            }
+
+            impl ::ttlv::Decodable for #ident {
+                fn decode(d: &mut impl ::ttlv::Decoder) -> ::ttlv::Result<Self> {
+                    Self::flatten_decode(d)
                 }
             }
         }]
@@ -121,7 +135,7 @@ fn derive_struct(data: DataStruct, ident: Ident, struct_attr: StructAttr) -> Res
             }
 
             impl #ident {
-                pub fn flatten_decode<D: ::ttlv::Decoder>(d: &mut D) -> ::ttlv::Result<Self> {
+                pub fn flatten_decode<D: ::ttlv::Decoder>(d: &mut D) -> ::ttlv::Result<Self> #where_clause {
                     #(#stmts;) *
                     let res = Self {
                         #(#idents), *

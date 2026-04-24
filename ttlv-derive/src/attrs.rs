@@ -12,7 +12,7 @@
 //! | `tag = <expr>`         | struct, field        | TTLV tag for encoding/decoding                           |
 //! | `flatten`              | struct, field, enum  | Encode/decode fields inline (no struct wrapper)           |
 //! | `enum`                 | enum                 | Marks enum as a TTLV Enumeration (vs struct-like enum)    |
-//! | `set_ext`              | field                | Store decoded value in the extensions context             |
+//! | `set_ext`              | field                | Store decoded value in the extensions context (field type must implement `Clone`) |
 //! | `if(<expr>)`           | field                | Conditional encoding/decoding based on extensions context |
 //! | `skip`                 | field                | Skip this field; use `Default::default()` on decode       |
 //! | `default`              | enum variant         | Catch-all variant for unknown discriminants               |
