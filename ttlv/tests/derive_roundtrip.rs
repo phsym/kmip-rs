@@ -168,7 +168,7 @@ fn test_enum_unknown_variant_decoded_to_default() {
 
     match decoded {
         Status::Unknown(raw) => assert_eq!(raw.numeric(), Some(0xFF)),
-        other => panic!("Expected Unknown variant, got {:?}", other),
+        other => panic!("Expected Unknown variant, got {other:?}"),
     }
 }
 
