@@ -33,18 +33,16 @@ impl TryFrom<&TransparentRSAPrivateKey> for Rsa<Private> {
     fn try_from(value: &TransparentRSAPrivateKey) -> Result<Self, Self::Error> {
         let mut bld = RsaPrivateKeyBuilder::new(
             BigNum::from_slice(&value.modulus)?,
-            BigNum::from_slice(
-                value
-                    .public_exponent
-                    .as_ref()
-                    .ok_or::<KeyError>("Invalid RSA parameter".into())?,
-            )?,
-            BigNum::from_slice(
-                value
-                    .private_exponent
-                    .as_ref()
-                    .ok_or::<KeyError>("Invalid RSA parameter".into())?,
-            )?,
+            BigNum::from_slice(value.public_exponent.as_ref().ok_or(
+                KeyError::InvalidRsaParameter {
+                    parameter: "public_exponent",
+                },
+            )?)?,
+            BigNum::from_slice(value.private_exponent.as_ref().ok_or(
+                KeyError::InvalidRsaParameter {
+                    parameter: "private_exponent",
+                },
+            )?)?,
         )?;
         if value.p.is_some() || value.q.is_some() {
             bld = bld.set_factors(
@@ -52,13 +50,13 @@ impl TryFrom<&TransparentRSAPrivateKey> for Rsa<Private> {
                     value
                         .p
                         .as_ref()
-                        .ok_or::<KeyError>("Invalid RSA parameter".into())?,
+                        .ok_or(KeyError::InvalidRsaParameter { parameter: "p" })?,
                 )?,
                 BigNum::from_slice(
                     value
                         .q
                         .as_ref()
-                        .ok_or::<KeyError>("Invalid RSA parameter".into())?,
+                        .ok_or(KeyError::InvalidRsaParameter { parameter: "q" })?,
                 )?,
             )?;
         }
@@ -67,24 +65,21 @@ impl TryFrom<&TransparentRSAPrivateKey> for Rsa<Private> {
             || value.crt_coefficient.is_some()
         {
             bld = bld.set_crt_params(
-                BigNum::from_slice(
-                    value
-                        .prime_exponent_p
-                        .as_ref()
-                        .ok_or::<KeyError>("Invalid RSA parameter".into())?,
-                )?,
-                BigNum::from_slice(
-                    value
-                        .prime_exponent_q
-                        .as_ref()
-                        .ok_or::<KeyError>("Invalid RSA parameter".into())?,
-                )?,
-                BigNum::from_slice(
-                    value
-                        .crt_coefficient
-                        .as_ref()
-                        .ok_or::<KeyError>("Invalid RSA parameter".into())?,
-                )?,
+                BigNum::from_slice(value.prime_exponent_p.as_ref().ok_or(
+                    KeyError::InvalidRsaParameter {
+                        parameter: "prime_exponent_p",
+                    },
+                )?)?,
+                BigNum::from_slice(value.prime_exponent_q.as_ref().ok_or(
+                    KeyError::InvalidRsaParameter {
+                        parameter: "prime_exponent_q",
+                    },
+                )?)?,
+                BigNum::from_slice(value.crt_coefficient.as_ref().ok_or(
+                    KeyError::InvalidRsaParameter {
+                        parameter: "crt_coefficient",
+                    },
+                )?)?,
             )?
         }
         Ok(bld.build())
@@ -156,18 +151,23 @@ impl FromObject<PrivateKey> for Rsa<Private> {
 
         match kb.cryptographic_algorithm {
             None | Some(CryptographicAlgorithm::RSA) => {}
-            _ => return Err("Invalid algorithm".into()),
+            got => {
+                return Err(KeyError::InvalidAlgorithm {
+                    expected: "RSA",
+                    got,
+                });
+            }
         }
 
-        let mat = kb.as_plain_material().ok_or("Invalid key material")?;
+        let mat = kb.as_plain_material().ok_or(KeyError::InvalidKeyMaterial)?;
         match mat {
             KeyMaterial::TransparentRSAPrivateKey(pkey) => Ok(pkey.try_into()?),
             KeyMaterial::Bytes(bytes) => match kb.key_format_type {
                 KeyFormatType::PKCS1 => Ok(Rsa::private_key_from_der(bytes)?),
                 KeyFormatType::PKCS8 => Ok(PKey::private_key_from_pkcs8(bytes)?.rsa()?),
-                _ => Err("Invalid key format".into()),
+                other => Err(KeyError::UnsupportedKeyFormat(other)),
             },
-            _ => Err("Invalid key value".into()),
+            _ => Err(KeyError::InvalidKeyValue),
         }
     }
 }
@@ -178,18 +178,23 @@ impl FromObject<PublicKey> for Rsa<Public> {
         let kb = pkey.key_block;
         match kb.cryptographic_algorithm {
             None | Some(CryptographicAlgorithm::RSA) => {}
-            _ => return Err("Invalid algorithm".into()),
+            got => {
+                return Err(KeyError::InvalidAlgorithm {
+                    expected: "RSA",
+                    got,
+                });
+            }
         }
 
-        let mat = kb.as_plain_material().ok_or("Invalid key material")?;
+        let mat = kb.as_plain_material().ok_or(KeyError::InvalidKeyMaterial)?;
         match mat {
             KeyMaterial::TransparentRSAPublicKey(pkey) => Ok(pkey.try_into()?),
             KeyMaterial::Bytes(bytes) => match kb.key_format_type {
                 KeyFormatType::PKCS1 => Ok(Rsa::public_key_from_der_pkcs1(bytes)?),
                 KeyFormatType::X509 => Ok(Rsa::public_key_from_der(bytes)?),
-                _ => Err("Invalid key format".into()),
+                other => Err(KeyError::UnsupportedKeyFormat(other)),
             },
-            _ => Err("Invalid key value".into()),
+            _ => Err(KeyError::InvalidKeyValue),
         }
     }
 }

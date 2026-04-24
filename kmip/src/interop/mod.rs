@@ -1,6 +1,6 @@
 use crate::{
     CryptographicAlgorithm, KeyBlock, KeyCompressionType, KeyFormatType, KeyMaterial, KeyValue,
-    Object, PlainKeyValue, ProtocolVersion,
+    Object, PlainKeyValue, ProtocolVersion, RecommendedCurve,
 };
 
 #[cfg(feature = "interop-openssl")]
@@ -11,7 +11,127 @@ mod boring;
 
 mod crypto;
 
-pub type KeyError = Box<dyn std::error::Error>;
+/// Errors raised while converting between KMIP objects and native key types.
+#[derive(Debug, thiserror::Error)]
+pub enum KeyError {
+    #[error("Invalid cryptographic algorithm: expected {expected}, got {got:?}")]
+    InvalidAlgorithm {
+        expected: &'static str,
+        got: Option<CryptographicAlgorithm>,
+    },
+    #[error("Unsupported key type")]
+    UnsupportedKeyType,
+    #[error("Invalid or unsupported cryptographic algorithm")]
+    UnsupportedCryptographicAlgorithm,
+    #[error("Unsupported key format: {0:?}")]
+    UnsupportedKeyFormat(KeyFormatType),
+    #[error("Unsupported curve: {0:?}")]
+    UnsupportedCurve(RecommendedCurve),
+    /// An OpenSSL/BoringSSL NID did not map to a known KMIP recommended curve.
+    #[error("Unsupported curve NID")]
+    UnsupportedCurveNid,
+    #[error("Missing curve")]
+    MissingCurve,
+    #[error("Recommended curve mismatch: expected {expected:?}, got {got:?}")]
+    CurveMismatch {
+        expected: RecommendedCurve,
+        got: RecommendedCurve,
+    },
+    #[error("Invalid or missing RSA parameter: {parameter}")]
+    InvalidRsaParameter { parameter: &'static str },
+    #[error("Invalid key material")]
+    InvalidKeyMaterial,
+    /// The key material variant is well-formed but not accepted in this context
+    /// (e.g. receiving a `TransparentDHPrivateKey` where only symmetric bytes are expected).
+    #[error("Unsupported key material variant")]
+    UnsupportedKeyMaterial,
+    #[error("Invalid key value")]
+    InvalidKeyValue,
+    #[error("Invalid key block")]
+    InvalidKeyBlock,
+    #[error("Unsupported wrapped key block")]
+    UnsupportedWrappedBlock,
+    #[error(transparent)]
+    Kmip(#[from] crate::errors::Error),
+    #[error(transparent)]
+    UnexpectedObject(#[from] crate::errors::UnexpectedObject),
+    #[error("Invalid UTF-8: {0}")]
+    InvalidUtf8(#[from] std::str::Utf8Error),
+    #[error("Key conversion failed: {0}")]
+    ConversionError(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
+}
+
+#[cfg(any(
+    feature = "interop-openssl",
+    feature = "interop-boring",
+    feature = "interop-rsa",
+    feature = "_interop-elliptic-curve"
+))]
+impl KeyError {
+    /// Wrap an arbitrary error into a [`KeyError::ConversionError`].
+    pub(crate) fn conversion<E>(err: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self::ConversionError(Box::new(err))
+    }
+}
+
+#[cfg(feature = "interop-openssl")]
+impl From<::openssl::error::ErrorStack> for KeyError {
+    fn from(err: ::openssl::error::ErrorStack) -> Self {
+        Self::conversion(err)
+    }
+}
+
+#[cfg(feature = "interop-boring")]
+impl From<::boring::error::ErrorStack> for KeyError {
+    fn from(err: ::boring::error::ErrorStack) -> Self {
+        Self::conversion(err)
+    }
+}
+
+#[cfg(feature = "interop-rsa")]
+impl From<::rsa::Error> for KeyError {
+    fn from(err: ::rsa::Error) -> Self {
+        Self::conversion(err)
+    }
+}
+
+#[cfg(feature = "interop-rsa")]
+impl From<::rsa::pkcs1::Error> for KeyError {
+    fn from(err: ::rsa::pkcs1::Error) -> Self {
+        Self::conversion(err)
+    }
+}
+
+#[cfg(feature = "_interop-elliptic-curve")]
+impl From<::elliptic_curve::Error> for KeyError {
+    fn from(err: ::elliptic_curve::Error) -> Self {
+        Self::conversion(err)
+    }
+}
+
+#[cfg(feature = "_interop-elliptic-curve")]
+impl From<::pkcs8::Error> for KeyError {
+    fn from(err: ::pkcs8::Error) -> Self {
+        Self::conversion(err)
+    }
+}
+
+#[cfg(feature = "_interop-elliptic-curve")]
+impl From<::pkcs8::spki::Error> for KeyError {
+    fn from(err: ::pkcs8::spki::Error) -> Self {
+        Self::conversion(err)
+    }
+}
+
+#[cfg(feature = "_interop-elliptic-curve")]
+impl From<::pkcs8::der::Error> for KeyError {
+    fn from(err: ::pkcs8::der::Error) -> Self {
+        Self::conversion(err)
+    }
+}
 
 pub trait ToObject<O: Into<Object>> {
     type Format;
@@ -221,5 +341,296 @@ impl From<FormatPublic> for FormatRsaPublic {
             FormatPublic::X509 => Self::X509,
             FormatPublic::Transparent => Self::Transparent,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(any(feature = "interop-rsa", feature = "interop-p256"))]
+    fn make_key_block(
+        format: KeyFormatType,
+        alg: Option<CryptographicAlgorithm>,
+        material: KeyMaterial,
+    ) -> KeyBlock {
+        KeyBlock {
+            key_format_type: format,
+            key_compression_type: None,
+            cryptographic_algorithm: alg,
+            cryptographic_length: None,
+            key_wrapping_data: None,
+            key_value: Some(KeyValue::Plain(PlainKeyValue {
+                attributes: vec![],
+                key_material: material,
+            })),
+        }
+    }
+
+    #[test]
+    fn key_error_display_includes_context() {
+        let err = KeyError::InvalidAlgorithm {
+            expected: "RSA",
+            got: Some(CryptographicAlgorithm::AES),
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("RSA"),
+            "message should mention expected: {msg}"
+        );
+        assert!(msg.contains("AES"), "message should mention got: {msg}");
+    }
+
+    #[test]
+    fn key_error_variants_are_matchable() {
+        // Simulate programmatic branching on typed variants — the point of #27.
+        let err = KeyError::UnsupportedCurve(RecommendedCurve::B163);
+        assert!(matches!(
+            err,
+            KeyError::UnsupportedCurve(RecommendedCurve::B163)
+        ));
+
+        let err = KeyError::UnsupportedKeyFormat(KeyFormatType::Opaque);
+        assert!(matches!(
+            err,
+            KeyError::UnsupportedKeyFormat(KeyFormatType::Opaque)
+        ));
+
+        let err = KeyError::CurveMismatch {
+            expected: RecommendedCurve::P256,
+            got: RecommendedCurve::P384,
+        };
+        assert!(matches!(
+            err,
+            KeyError::CurveMismatch {
+                expected: RecommendedCurve::P256,
+                got: RecommendedCurve::P384,
+            }
+        ));
+
+        let err = KeyError::InvalidRsaParameter {
+            parameter: "private_exponent",
+        };
+        assert!(matches!(
+            err,
+            KeyError::InvalidRsaParameter {
+                parameter: "private_exponent"
+            }
+        ));
+    }
+
+    #[test]
+    fn key_error_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<KeyError>();
+    }
+
+    #[test]
+    fn kmip_error_converts_via_from() {
+        // `Object::try_from` on the wrong variant returns `UnexpectedObject`; the
+        // `?`-propagation must promote that into a `KeyError` without ad-hoc strings.
+        use crate::{PrivateKey, PublicKey};
+        let pk = PrivateKey::from(KeyBlock {
+            key_format_type: KeyFormatType::Raw,
+            key_compression_type: None,
+            cryptographic_algorithm: None,
+            cryptographic_length: None,
+            key_wrapping_data: None,
+            key_value: Some(KeyValue::Plain(PlainKeyValue {
+                attributes: vec![],
+                key_material: KeyMaterial::Bytes(vec![]),
+            })),
+        });
+        let obj: Object = pk.into();
+        let err: KeyError = <&PublicKey>::try_from(&obj).unwrap_err().into();
+        assert!(
+            matches!(err, KeyError::UnexpectedObject(_)),
+            "expected UnexpectedObject, got: {err:?}"
+        );
+    }
+
+    #[cfg(feature = "interop-rsa")]
+    #[test]
+    fn rsa_public_key_rejects_wrong_algorithm_with_typed_error() {
+        use crate::PublicKey as PublicKeyObj;
+        use ::rsa::RsaPublicKey;
+
+        let obj: Object = PublicKeyObj::from(make_key_block(
+            KeyFormatType::PKCS1,
+            Some(CryptographicAlgorithm::AES),
+            KeyMaterial::Bytes(vec![0u8; 4]),
+        ))
+        .into();
+
+        let err = RsaPublicKey::from_kmip_object(obj).expect_err("should fail");
+        assert!(
+            matches!(
+                err,
+                KeyError::InvalidAlgorithm {
+                    expected: "RSA",
+                    got: Some(CryptographicAlgorithm::AES),
+                }
+            ),
+            "expected InvalidAlgorithm variant, got: {err:?}"
+        );
+    }
+
+    #[cfg(feature = "interop-rsa")]
+    #[test]
+    fn rsa_private_key_rejects_unsupported_format_with_typed_error() {
+        use crate::PrivateKey as PrivateKeyObj;
+        use ::rsa::RsaPrivateKey;
+
+        let obj: Object = PrivateKeyObj::from(make_key_block(
+            KeyFormatType::Raw,
+            Some(CryptographicAlgorithm::RSA),
+            KeyMaterial::Bytes(vec![0u8; 4]),
+        ))
+        .into();
+
+        let err = RsaPrivateKey::from_kmip_object(obj).expect_err("should fail");
+        assert!(
+            matches!(err, KeyError::UnsupportedKeyFormat(KeyFormatType::Raw)),
+            "expected UnsupportedKeyFormat(Raw), got: {err:?}"
+        );
+    }
+
+    #[cfg(feature = "interop-rsa")]
+    #[test]
+    fn rsa_private_key_rejects_missing_private_exponent() {
+        use crate::TransparentRSAPrivateKey;
+        let transparent = TransparentRSAPrivateKey {
+            modulus: ttlv::BigInteger::unsigned(vec![1]),
+            private_exponent: None,
+            public_exponent: Some(ttlv::BigInteger::unsigned(vec![1])),
+            p: None,
+            q: None,
+            prime_exponent_p: None,
+            prime_exponent_q: None,
+            crt_coefficient: None,
+        };
+        let err = ::rsa::RsaPrivateKey::try_from(&transparent).expect_err("should fail");
+        assert!(
+            matches!(err, KeyError::InvalidRsaParameter { .. }),
+            "expected InvalidRsaParameter, got: {err:?}"
+        );
+    }
+
+    #[cfg(feature = "interop-openssl")]
+    #[test]
+    fn openssl_error_stack_wraps_to_conversion_error() {
+        let underlying =
+            ::openssl::rsa::Rsa::<::openssl::pkey::Public>::public_key_from_der(b"garbage")
+                .expect_err("garbage DER must fail to parse");
+        let err: KeyError = underlying.into();
+        assert!(
+            matches!(err, KeyError::ConversionError(_)),
+            "expected ConversionError, got: {err:?}"
+        );
+    }
+
+    #[cfg(feature = "interop-boring")]
+    #[test]
+    fn boring_error_stack_wraps_to_conversion_error() {
+        let underlying =
+            ::boring::rsa::Rsa::<::boring::pkey::Public>::public_key_from_der(b"garbage")
+                .expect_err("garbage DER must fail to parse");
+        let err: KeyError = underlying.into();
+        assert!(
+            matches!(err, KeyError::ConversionError(_)),
+            "expected ConversionError, got: {err:?}"
+        );
+    }
+
+    #[cfg(feature = "interop-rsa")]
+    #[test]
+    fn rsa_pkcs1_error_wraps_to_conversion_error() {
+        use ::rsa::pkcs1::DecodeRsaPrivateKey;
+        let underlying = ::rsa::RsaPrivateKey::from_pkcs1_der(b"garbage")
+            .expect_err("garbage DER must fail to parse");
+        let err: KeyError = underlying.into();
+        assert!(
+            matches!(err, KeyError::ConversionError(_)),
+            "expected ConversionError, got: {err:?}"
+        );
+    }
+
+    #[cfg(feature = "interop-p256")]
+    #[test]
+    fn elliptic_curve_error_wraps_to_conversion_error() {
+        let underlying = ::p256::PublicKey::from_sec1_bytes(&[0u8; 5])
+            .expect_err("invalid SEC1 bytes must fail");
+        let err: KeyError = underlying.into();
+        assert!(
+            matches!(err, KeyError::ConversionError(_)),
+            "expected ConversionError, got: {err:?}"
+        );
+    }
+
+    #[cfg(feature = "interop-p256")]
+    #[test]
+    fn pkcs8_error_wraps_to_conversion_error() {
+        use ::pkcs8::DecodePrivateKey;
+        let underlying = ::p256::SecretKey::from_pkcs8_der(b"garbage")
+            .expect_err("garbage DER must fail to parse");
+        let err: KeyError = underlying.into();
+        assert!(
+            matches!(err, KeyError::ConversionError(_)),
+            "expected ConversionError, got: {err:?}"
+        );
+    }
+
+    #[cfg(feature = "interop-p256")]
+    #[test]
+    fn pkcs8_spki_error_wraps_to_conversion_error() {
+        use ::pkcs8::DecodePublicKey;
+        let underlying = ::p256::PublicKey::from_public_key_der(b"garbage")
+            .expect_err("garbage DER must fail to parse");
+        let err: KeyError = underlying.into();
+        assert!(
+            matches!(err, KeyError::ConversionError(_)),
+            "expected ConversionError, got: {err:?}"
+        );
+    }
+
+    #[cfg(feature = "_interop-elliptic-curve")]
+    #[test]
+    fn pkcs8_der_error_wraps_to_conversion_error() {
+        use ::pkcs8::der::Decode;
+        let underlying = ::pkcs8::der::asn1::OctetString::from_der(b"garbage")
+            .expect_err("garbage DER must fail to parse");
+        let err: KeyError = underlying.into();
+        assert!(
+            matches!(err, KeyError::ConversionError(_)),
+            "expected ConversionError, got: {err:?}"
+        );
+    }
+
+    #[cfg(feature = "interop-p256")]
+    #[test]
+    fn ec_public_key_rejects_curve_mismatch_with_typed_error() {
+        use crate::{PublicKey as PublicKeyObj, TransparentECPublicKey};
+        let obj: Object = PublicKeyObj::from(make_key_block(
+            KeyFormatType::TransparentECPublicKey,
+            Some(CryptographicAlgorithm::EC),
+            KeyMaterial::TransparentECPublicKey(TransparentECPublicKey {
+                recommended_curve: RecommendedCurve::P384,
+                q_string: vec![0u8; 97],
+            }),
+        ))
+        .into();
+
+        let err = <::p256::PublicKey as FromObject<PublicKeyObj>>::from_kmip_object(obj)
+            .expect_err("should fail");
+        assert!(
+            matches!(
+                err,
+                KeyError::CurveMismatch {
+                    expected: RecommendedCurve::P256,
+                    got: RecommendedCurve::P384,
+                }
+            ),
+            "expected CurveMismatch, got: {err:?}"
+        );
     }
 }

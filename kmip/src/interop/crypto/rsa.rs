@@ -73,7 +73,9 @@ impl TryFrom<&TransparentRSAPrivateKey> for RsaPrivateKey {
                 BigUint::from_bytes_be(q),
                 BigUint::from_bytes_be(e),
             )?),
-            _ => Err("Invalid RSA parameter".into()),
+            _ => Err(KeyError::InvalidRsaParameter {
+                parameter: "private_exponent or (p, q)",
+            }),
         }
     }
 }
@@ -120,18 +122,23 @@ impl TryFrom<PublicKey> for RsaPublicKey {
         let kb = pkey.key_block;
         match kb.cryptographic_algorithm {
             None | Some(CryptographicAlgorithm::RSA) => {}
-            _ => return Err("Invalid algorithm".into()),
+            got => {
+                return Err(KeyError::InvalidAlgorithm {
+                    expected: "RSA",
+                    got,
+                });
+            }
         }
 
-        let mat = kb.as_plain_material().ok_or("Invalid key material")?;
+        let mat = kb.as_plain_material().ok_or(KeyError::InvalidKeyMaterial)?;
         match mat {
             KeyMaterial::TransparentRSAPublicKey(pkey) => Ok(pkey.try_into()?),
             KeyMaterial::Bytes(bytes) => match kb.key_format_type {
                 KeyFormatType::PKCS1 => Ok(RsaPublicKey::from_pkcs1_der(bytes)?),
                 KeyFormatType::X509 => Ok(RsaPublicKey::from_public_key_der(bytes)?),
-                _ => Err("Invalid key format".into()),
+                other => Err(KeyError::UnsupportedKeyFormat(other)),
             },
-            _ => Err("Invalid key value".into()),
+            _ => Err(KeyError::InvalidKeyValue),
         }
     }
 }
@@ -143,18 +150,23 @@ impl TryFrom<PrivateKey> for RsaPrivateKey {
 
         match kb.cryptographic_algorithm {
             None | Some(CryptographicAlgorithm::RSA) => {}
-            _ => return Err("Invalid algorithm".into()),
+            got => {
+                return Err(KeyError::InvalidAlgorithm {
+                    expected: "RSA",
+                    got,
+                });
+            }
         }
 
-        let mat = kb.as_plain_material().ok_or("Invalid key material")?;
+        let mat = kb.as_plain_material().ok_or(KeyError::InvalidKeyMaterial)?;
         match mat {
             KeyMaterial::TransparentRSAPrivateKey(pkey) => Ok(pkey.try_into()?),
             KeyMaterial::Bytes(bytes) => match kb.key_format_type {
                 KeyFormatType::PKCS1 => Ok(RsaPrivateKey::from_pkcs1_der(bytes)?),
                 KeyFormatType::PKCS8 => Ok(RsaPrivateKey::from_pkcs8_der(bytes)?),
-                _ => Err("Invalid key format".into()),
+                other => Err(KeyError::UnsupportedKeyFormat(other)),
             },
-            _ => Err("Invalid key value".into()),
+            _ => Err(KeyError::InvalidKeyValue),
         }
     }
 }
