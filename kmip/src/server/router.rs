@@ -42,7 +42,10 @@ struct PayloadHandlerWrapper<H: OperationHandler>(H);
 
 impl<H: OperationHandler> PayloadHandler for PayloadHandlerWrapper<H> {
     fn handle(&self, req: RequestPayload) -> Result<ResponsePayload, ProtocolError> {
-        Ok(self.0.handle(req.try_into().unwrap())?.into())
+        let typed_req = req.try_into().map_err(|e: crate::Error| {
+            ProtocolError::new_failed(ResultReason::InvalidMessage, Some(e.to_string()))
+        })?;
+        Ok(self.0.handle(typed_req)?.into())
     }
 }
 
@@ -281,5 +284,23 @@ mod tests {
         let resp = router.handle(req);
         assert_eq!(resp.header.batch_count, 0);
         assert!(resp.batch_item.is_empty());
+    }
+
+    #[test]
+    fn payload_handler_wrapper_returns_invalid_message_on_type_mismatch() {
+        use crate::{ActivateRequestPayload, ActivateResponsePayload};
+
+        let wrapper = PayloadHandlerWrapper(FnOperationWrapper(
+            |_: ActivateRequestPayload| -> Result<ActivateResponsePayload, ProtocolError> {
+                unreachable!("handler must not be invoked on type mismatch")
+            },
+            PhantomData,
+        ));
+        let mismatched = RequestPayload::DiscoverVersions(DiscoverVersionsRequestPayload {
+            protocol_version: vec![],
+        });
+        let err = wrapper.handle(mismatched).unwrap_err();
+        assert_eq!(err.status, ResultStatus::OperationFailed);
+        assert_eq!(err.reason, Some(ResultReason::InvalidMessage));
     }
 }
