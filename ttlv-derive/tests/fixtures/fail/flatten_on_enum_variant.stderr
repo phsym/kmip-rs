@@ -1,0 +1,5 @@
+error: flatten is not supported on enum variants
+ --> tests/fixtures/fail/flatten_on_enum_variant.rs:6:12
+  |
+6 |     #[ttlv(flatten)]
+  |            ^^^^^^^

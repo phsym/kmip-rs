@@ -1,0 +1,5 @@
+error: tag defined more than once
+ --> tests/fixtures/fail/tag_twice.rs:4:17
+  |
+4 | #[ttlv(tag = 1, tag = 2)]
+  |                 ^^^

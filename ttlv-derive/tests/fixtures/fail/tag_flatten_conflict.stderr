@@ -1,0 +1,11 @@
+error: tag and flatten attribute are mutually exclusive
+ --> tests/fixtures/fail/tag_flatten_conflict.rs:4:8
+  |
+4 | #[ttlv(tag = 1, flatten)]
+  |        ^^^
+
+error: tag and flatten attribute are mutually exclusive
+ --> tests/fixtures/fail/tag_flatten_conflict.rs:4:17
+  |
+4 | #[ttlv(tag = 1, flatten)]
+  |                 ^^^^^^^

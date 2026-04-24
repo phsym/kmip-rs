@@ -1,0 +1,5 @@
+error: Missing discriminant
+ --> tests/fixtures/fail/missing_discriminant.rs:6:5
+  |
+6 |     Variant,
+  |     ^^^^^^^

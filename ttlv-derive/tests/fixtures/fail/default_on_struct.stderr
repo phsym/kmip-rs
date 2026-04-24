@@ -1,0 +1,5 @@
+error: default is not supported on structs
+ --> tests/fixtures/fail/default_on_struct.rs:4:17
+  |
+4 | #[ttlv(tag = 1, default)]
+  |                 ^^^^^^^

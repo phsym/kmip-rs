@@ -1,0 +1,5 @@
+error: Default variant must wrap a single unnamed field
+ --> tests/fixtures/fail/default_unit_variant.rs:8:5
+  |
+8 |     Unknown,
+  |     ^^^^^^^

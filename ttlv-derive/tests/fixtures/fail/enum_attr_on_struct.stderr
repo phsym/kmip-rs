@@ -1,0 +1,5 @@
+error: enum is not supported on structs
+ --> tests/fixtures/fail/enum_attr_on_struct.rs:4:8
+  |
+4 | #[ttlv(enum)]
+  |        ^^^^

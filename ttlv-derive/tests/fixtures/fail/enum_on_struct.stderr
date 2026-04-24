@@ -1,0 +1,8 @@
+error: Only enums are supported
+ --> tests/fixtures/fail/enum_on_struct.rs:4:1
+  |
+4 | / #[ttlv(enum)]
+5 | | struct Foo {
+6 | |     x: u32,
+7 | | }
+  | |_^

@@ -18,3 +18,11 @@ proc-macro = true
 syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
+
+[dev-dependencies]
+trybuild = "1"
+# Dev-dep cycle: `ttlv` depends on this crate (optional, feature = "derive").
+# Pulling `ttlv` in here is legal because dev-deps don't leak into the release
+# graph, and it lets compile-pass fixtures resolve the generated `::ttlv::*`
+# references the macros emit.
+ttlv = { path = "../ttlv", default-features = false }

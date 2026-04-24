@@ -1,0 +1,5 @@
+error: Default variant must use a single unnamed field, not named fields
+ --> tests/fixtures/fail/default_named_fields_variant.rs:7:13
+  |
+7 |     Unknown { name: String },
+  |             ^^^^^^^^^^^^^^^^
