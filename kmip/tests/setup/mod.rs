@@ -1,37 +1,25 @@
+use std::env;
+
 use kmip::{Client, ClientBuilder, CorrelationValueMiddleware, DebugMiddleware};
 
-// static ADDR: &str = "localhost:5696";
-// static CA: &str = "/Users/psymonea/repos/enablers/kms/cli/kms_config/small-kms/cert/public-ca.crt";
-// static CERT: &str =
-//     "/Users/psymonea/repos/enablers/kms/cli/kms_config/small-kms/cert/domain/cert.pem";
-// static KEY: &str =
-//     "/Users/psymonea/repos/enablers/kms/cli/kms_config/small-kms/cert/domain/key.pem";
-// static DOMAIN: &str = "localhost";
-
-// static ADDR: &str = "okms.gra.preprod.enablers.ovh:5696";
-// static CA: &str = "./certs/preprod/ca.pem";
-// static CERT: &str = "./certs/preprod/cert.pem";
-// static KEY: &str = "./certs/preprod/key.pem";
-// static DOMAIN: &str = "okms.gra.preprod.enablers.ovh";
-
-static ADDR: &str = "eu-west-rbx.okms.ovh.net:5696";
-static CA: &str = "../certs/prod/ca.pem";
-static CERT: &str = "../certs/prod/cert.pem";
-static KEY: &str = "../certs/prod/key.pem";
-static DOMAIN: &str = "eu-west-rbx.okms.ovh.net";
-
-// static RESOURCE_ID: &str = "ad4d0cc9-c0e2-4958-b06d-f74c26632b5d";
-
 pub fn new_client() -> Client {
+    let addr = env::var("KMIP_TEST_ADDR")
+        .expect("KMIP_TEST_ADDR must be set to the KMIP server address as host:port");
+    let domain = env::var("KMIP_TEST_DOMAIN")
+        .expect("KMIP_TEST_DOMAIN must be set to the TLS SNI hostname of the KMIP server");
+    let ca = env::var("KMIP_TEST_CA")
+        .expect("KMIP_TEST_CA must be set to the path of a PEM-encoded CA certificate");
+    let cert = env::var("KMIP_TEST_CERT")
+        .expect("KMIP_TEST_CERT must be set to the path of a PEM-encoded client certificate");
+    let key = env::var("KMIP_TEST_KEY")
+        .expect("KMIP_TEST_KEY must be set to the path of a PEM-encoded client private key");
+
     ClientBuilder::new()
-        .add_root_certificate_file(CA)
+        .add_root_certificate_file(&ca)
         .unwrap()
-        .identity_file(CERT, KEY)
+        .identity_file(&cert, &key)
         .unwrap()
-        .connect_rustls(ADDR, DOMAIN)
-        // .connect_openssl(ADDR, DOMAIN)
-        // .connect_native(ADDR, DOMAIN)
-        // .connect_boring(ADDR, DOMAIN)
+        .connect_rustls(&addr, &domain)
         .unwrap()
         .with_middleware(CorrelationValueMiddleware::uuid())
         .with_middleware(DebugMiddleware)

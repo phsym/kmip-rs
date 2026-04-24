@@ -3,3 +3,4 @@ target/
 certs/
 *.pem
 Cargo.lock
+.env*
