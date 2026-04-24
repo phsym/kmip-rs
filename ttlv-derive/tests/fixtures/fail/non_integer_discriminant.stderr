@@ -1,0 +1,5 @@
+error: Discriminant must be an integer literal
+ --> tests/fixtures/fail/non_integer_discriminant.rs:6:9
+  |
+6 |     A = 1 + 0,
+  |         ^^^^^

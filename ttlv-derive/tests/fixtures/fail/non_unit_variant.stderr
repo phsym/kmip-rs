@@ -1,0 +1,5 @@
+error: Only unit fields are supported
+ --> tests/fixtures/fail/non_unit_variant.rs:6:5
+  |
+6 |     B(u32),
+  |     ^

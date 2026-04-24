@@ -31,10 +31,25 @@ pub fn parse_ttlv_variants(en: &DataEnum) -> Result<Vec<TtlvVariant>> {
         if attrs.default {
             match &var.fields {
                 Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {}
-                _ => {
+                Fields::Unit => {
                     return Err(Error::new_spanned(
                         &var.ident,
-                        "Default variant must have exactly one unnamed field",
+                        "Default variant must wrap a single unnamed field",
+                    ));
+                }
+                Fields::Unnamed(fields) => {
+                    return Err(Error::new_spanned(
+                        &var.fields,
+                        format!(
+                            "Default variant must have exactly one field, got {}",
+                            fields.unnamed.len()
+                        ),
+                    ));
+                }
+                Fields::Named(_) => {
+                    return Err(Error::new_spanned(
+                        &var.fields,
+                        "Default variant must use a single unnamed field, not named fields",
                     ));
                 }
             }

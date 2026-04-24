@@ -1,0 +1,5 @@
+error: Unknown attribute
+ --> tests/fixtures/fail/unknown_attribute.rs:4:8
+  |
+4 | #[ttlv(bogus)]
+  |        ^^^^^
