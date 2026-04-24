@@ -17,9 +17,11 @@
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
-use syn::{Data, DataEnum, DataStruct, DeriveInput, Error, Expr, Ident, Result, spanned::Spanned};
+use syn::{
+    Data, DataEnum, DataStruct, DeriveInput, Error, Expr, Ident, Result, Type, spanned::Spanned,
+};
 
-use crate::fields::FieldInfo;
+use crate::fields::{FieldInfo, clone_bounds_where_clause};
 use crate::ttlv_enum::parse_ttlv_variants;
 use crate::{AttrExt, CallMode, EnumAttr, EnumEnumAttr, StructAttr};
 
@@ -41,7 +43,7 @@ pub fn derive_encodable_fn2(item: TokenStream2) -> Result<TokenStream2> {
 // --- Struct encoding ---
 
 fn derive_struct(data: DataStruct, ident: Ident, struct_attr: StructAttr) -> Result<TokenStream2> {
-    let branch = impl_fields_encode(data.fields, "e", None)?;
+    let (branch, set_ext_types) = impl_fields_encode(data.fields, "e", None)?;
 
     let mut impls = vec![impl_inner_encode(
         &ident,
@@ -51,6 +53,7 @@ fn derive_struct(data: DataStruct, ident: Ident, struct_attr: StructAttr) -> Res
                 #branch
             }
         },
+        &set_ext_types,
     )];
 
     match struct_attr.call_mode {
@@ -128,9 +131,12 @@ fn derive_enum_enum(en: DataEnum, ident: Ident, enum_attr: EnumEnumAttr) -> Resu
 /// Each variant's fields are encoded as if it were a struct, wrapped in a `match self` arm.
 fn derive_enum_struct(en: DataEnum, ident: Ident, struct_attr: StructAttr) -> Result<TokenStream2> {
     let mut branches = Vec::new();
+    let mut set_ext_types = Vec::new();
     for var in en.variants {
         var.attrs.get_attr()?.for_enum_variant()?;
-        branches.push(impl_fields_encode(var.fields, "e", Some(var.ident))?);
+        let (branch, mut types) = impl_fields_encode(var.fields, "e", Some(var.ident))?;
+        branches.push(branch);
+        set_ext_types.append(&mut types);
     }
 
     let mut impls = vec![impl_inner_encode(
@@ -141,6 +147,7 @@ fn derive_enum_struct(en: DataEnum, ident: Ident, struct_attr: StructAttr) -> Re
                 #(#branches), *
             };
         },
+        &set_ext_types,
     )];
 
     match struct_attr.call_mode {
@@ -176,13 +183,14 @@ fn impl_fields_encode(
     fields: syn::Fields,
     encoder_ident: &str,
     variant: Option<Ident>,
-) -> Result<TokenStream2> {
+) -> Result<(TokenStream2, Vec<Type>)> {
     let encoder = Ident::new(encoder_ident, Span::call_site());
     let field_infos = FieldInfo::from_fields(fields)?;
 
     let bindings: Vec<_> = field_infos.iter().map(|f| f.binding()).collect();
 
     let mut stmts = Vec::new();
+    let mut set_ext_types = Vec::new();
     for f in &field_infos {
         if f.skip {
             continue;
@@ -203,6 +211,7 @@ fn impl_fields_encode(
                 #encoder.extensions().insert(#var.clone());
                 #call
             };
+            set_ext_types.push(f.ty.clone());
         }
         if let Some(ref filter) = f.if_filter {
             call = quote! {
@@ -218,14 +227,16 @@ fn impl_fields_encode(
         stmts.push(call);
     }
 
-    if let Some(varname) = variant {
-        return Ok(quote! {Self::#varname{#(#bindings), *} => {
+    let branch = if let Some(varname) = variant {
+        quote! {Self::#varname{#(#bindings), *} => {
             #(#stmts); *
-        }});
-    }
-    Ok(quote! {Self{#(#bindings), *} => {
-        #(#stmts); *
-    }})
+        }}
+    } else {
+        quote! {Self{#(#bindings), *} => {
+            #(#stmts); *
+        }}
+    };
+    Ok((branch, set_ext_types))
 }
 
 // --- Code generation helpers ---
@@ -233,11 +244,21 @@ fn impl_fields_encode(
 // wrap the actual encoding logic (produced by `impl_fields_encode`).
 
 /// Generates the private `inner_encode()` inherent method that contains the body of the encoding logic.
-fn impl_inner_encode(ident: &Ident, encoder_ident: &str, body: TokenStream2) -> TokenStream2 {
+///
+/// Fields marked `#[ttlv(set_ext)]` require `Clone`, so each set_ext field type
+/// contributes a `where <ty>: Clone` bound on this method's signature. The bound
+/// is spanned at the field type so a missing `Clone` impl surfaces at the field.
+fn impl_inner_encode(
+    ident: &Ident,
+    encoder_ident: &str,
+    body: TokenStream2,
+    set_ext_types: &[Type],
+) -> TokenStream2 {
     let encoder = Ident::new(encoder_ident, Span::call_site());
+    let where_clause = clone_bounds_where_clause(set_ext_types);
     quote! {
         impl #ident {
-            fn inner_encode(&self, #encoder: &mut impl ::ttlv::Encoder) {
+            fn inner_encode(&self, #encoder: &mut impl ::ttlv::Encoder) #where_clause {
                 #body
             }
         }

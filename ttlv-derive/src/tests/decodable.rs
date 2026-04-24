@@ -118,7 +118,8 @@ fn test_struct_unnamed() {
 }
 
 #[test]
-/// Flattened struct: generates only Decodable (no TagDecodable, no flatten_decode).
+/// Flattened struct: generates an inherent `flatten_decode` helper plus a
+/// `Decodable` impl that delegates to it. No `TagDecodable`.
 fn test_struct_flatten() {
     let source: TokenStream2 = parse_quote! {
         #[ttlv(flatten)]
@@ -129,8 +130,8 @@ fn test_struct_flatten() {
         }
     };
     let expected: TokenStream2 = parse_quote! {
-        impl ::ttlv::Decodable for Toto {
-            fn decode(d: &mut impl ::ttlv::Decoder) -> ::ttlv::Result<Self> {
+        impl Toto {
+            pub fn flatten_decode<D: ::ttlv::Decoder>(d: &mut D) -> ::ttlv::Result<Self> {
                 let _field1: u32 = d.decode()?;
                 let _field2: String = d.tag_decode(42)?;
                 let res = Self {
@@ -138,6 +139,11 @@ fn test_struct_flatten() {
                     field2: _field2
                 };
                 Ok(res)
+            }
+        }
+        impl ::ttlv::Decodable for Toto {
+            fn decode(d: &mut impl ::ttlv::Decoder) -> ::ttlv::Result<Self> {
+                Self::flatten_decode(d)
             }
         }
     };
@@ -206,7 +212,7 @@ fn test_struct_set_ext_and_if() {
             }
         }
         impl Toto {
-            pub fn flatten_decode<D: ::ttlv::Decoder>(d: &mut D) -> ::ttlv::Result<Self> {
+            pub fn flatten_decode<D: ::ttlv::Decoder>(d: &mut D) -> ::ttlv::Result<Self> where u32: ::std::clone::Clone {
                 let _field1: u32 = d.decode()?;
                 d.extensions().insert(_field1.clone());
                 let _field2 = {
@@ -235,6 +241,29 @@ fn test_struct_set_ext_and_if() {
 
     let output = derive_decodable_fn2(source).unwrap();
     assert_eq!(expected.to_string(), output.to_string())
+}
+
+#[test]
+/// Multiple `set_ext` fields of distinct types each contribute a predicate to
+/// the generated `where` clause; duplicate types collapse to a single predicate.
+fn test_struct_set_ext_multiple_types_dedup() {
+    let source: TokenStream2 = parse_quote! {
+        #[ttlv(tag = Tag::MyTag)]
+        struct Toto {
+            #[ttlv(set_ext)]
+            a: u32,
+            #[ttlv(set_ext)]
+            b: String,
+            #[ttlv(set_ext)]
+            c: u32,
+        }
+    };
+    let output = derive_decodable_fn2(source).unwrap().to_string();
+    assert!(
+        output.contains("where u32 : :: std :: clone :: Clone , String : :: std :: clone :: Clone"),
+        "expected deduplicated where clause, got: {output}"
+    );
+    assert_eq!(output.matches("u32 : :: std :: clone :: Clone").count(), 1);
 }
 
 // --- Enum ---

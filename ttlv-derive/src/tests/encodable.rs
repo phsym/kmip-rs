@@ -241,7 +241,7 @@ fn test_struct_set_ext_and_if() {
     };
     let expected: TokenStream2 = parse_quote! {
         impl Toto {
-            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) {
+            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) where u32: ::std::clone::Clone {
                 match self {
                     Self {
                         field1: _field1,
@@ -282,6 +282,49 @@ fn test_struct_set_ext_and_if() {
 
     let output = derive_encodable_fn2(source).unwrap();
     assert_eq!(expected.to_string(), output.to_string())
+}
+
+#[test]
+/// Multiple `set_ext` fields of distinct types each contribute a predicate to
+/// the generated `where` clause; duplicate types collapse to a single predicate.
+fn test_struct_set_ext_multiple_types_dedup() {
+    let source: TokenStream2 = parse_quote! {
+        #[ttlv(tag = Tag::MyTag)]
+        struct Toto {
+            #[ttlv(set_ext)]
+            a: u32,
+            #[ttlv(set_ext)]
+            b: String,
+            #[ttlv(set_ext)]
+            c: u32,
+        }
+    };
+    let output = derive_encodable_fn2(source).unwrap().to_string();
+    assert!(
+        output.contains("where u32 : :: std :: clone :: Clone , String : :: std :: clone :: Clone"),
+        "expected deduplicated where clause, got: {output}"
+    );
+    assert_eq!(output.matches("u32 : :: std :: clone :: Clone").count(), 1);
+}
+
+#[test]
+/// Struct-like enum with `set_ext` on variant fields: types from every variant
+/// are aggregated into a single `where` clause on `inner_encode`.
+fn test_enum_variant_set_ext() {
+    let source: TokenStream2 = parse_quote! {
+        #[ttlv(tag = Tag::MyTag)]
+        enum Toto {
+            A(#[ttlv(set_ext)] u32),
+            B(#[ttlv(set_ext)] String),
+        }
+    };
+    let output = derive_encodable_fn2(source).unwrap().to_string();
+    assert!(
+        output.contains("inner_encode") && output.contains("where"),
+        "expected where clause on inner_encode, got: {output}"
+    );
+    assert!(output.contains("u32 : :: std :: clone :: Clone"));
+    assert!(output.contains("String : :: std :: clone :: Clone"));
 }
 
 // --- Enum (struct-like) ---
