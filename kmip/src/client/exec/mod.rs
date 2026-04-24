@@ -7,28 +7,62 @@ use crate::{
 
 use super::{BatchExec, Client};
 
-mod activate;
 mod add_attribute;
-mod archive_recover;
 mod create;
 mod create_keypair;
 mod delete_attribute;
-mod destroy;
 mod encrypt_decrypt;
 mod get;
-mod get_attribute_list;
 mod get_attributes;
 mod get_usage;
 mod import_export;
 mod locate;
 mod modify_attribute;
-mod obtain_lease;
 mod query;
 mod register;
 mod rekey;
 mod rekey_keypair;
 mod revoke;
 mod sign_verify;
+
+macro_rules! impl_unique_identifier_op {
+    ($method:ident, $payload:ident) => {
+        impl $crate::Client {
+            pub fn $method(
+                &mut self,
+                id: impl Into<String>,
+            ) -> $crate::client::exec::Exec<'_, $crate::$payload> {
+                $crate::client::exec::Exec::new(
+                    self,
+                    $crate::$payload {
+                        unique_identifier: Some(id.into()),
+                    },
+                )
+            }
+        }
+
+        impl<'a> $crate::BatchClient<'a> {
+            pub fn $method(
+                self,
+                id: Option<String>,
+            ) -> $crate::client::exec::Exec<'a, $crate::$payload> {
+                $crate::client::exec::Exec::new(
+                    self.0,
+                    $crate::$payload {
+                        unique_identifier: id,
+                    },
+                )
+            }
+        }
+    };
+}
+
+impl_unique_identifier_op!(activate, ActivateRequestPayload);
+impl_unique_identifier_op!(destroy, DestroyRequestPayload);
+impl_unique_identifier_op!(obtain_lease, ObtainLeaseRequestPayload);
+impl_unique_identifier_op!(get_attribute_list, GetAttributeListRequestPayload);
+impl_unique_identifier_op!(archive, ArchiveRequestPayload);
+impl_unique_identifier_op!(recover, RecoverRequestPayload);
 
 pub struct WantExec;
 
