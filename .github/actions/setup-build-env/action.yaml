@@ -4,6 +4,6 @@ description: Setup build environment
 runs:
   using: composite
   steps:
-    - uses: dtolnay/rust-toolchain@1.93.0
+    - uses: dtolnay/rust-toolchain@1.88.0
       with:
         components: clippy,rustfmt
