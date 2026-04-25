@@ -92,9 +92,9 @@ impl Encoder for TtlvEncoder {
     }
 
     fn write_bigint(&mut self, tag: impl Tag, num: impl AsRef<[u8]>) -> crate::Result<()> {
+        let num = super::normalize_bigint(num.as_ref());
         self.write_tag(tag.numeric_or_err()?);
         self.write_type(Type::BigInteger);
-        let num = num.as_ref();
         let pad_len = Self::pad_for_len(num.len());
         self.write_length(num.len() + pad_len);
         // Extend sign
@@ -339,5 +339,19 @@ mod tests {
         let mut enc = TtlvEncoder::new();
         let err = enc.write_integer("StringOnlyTag", 1).unwrap_err();
         assert!(matches!(err, crate::Error::TagMissingNumeric { .. }));
+    }
+
+    #[test]
+    fn test_empty_bigint_encoded_as_zero() -> crate::Result<()> {
+        let mut enc = TtlvEncoder::new();
+        enc.write_bigint(0x420020u32, b"")?;
+
+        let mut zero_enc = TtlvEncoder::new();
+        zero_enc.write_bigint(0x420020u32, [0u8])?;
+        assert_eq!(zero_enc.bytes(), enc.bytes());
+
+        let expected = hex("42 00 20 | 04 | 00 00 00 08 | 00 00 00 00 00 00 00 00");
+        assert_eq!(expected, data_encoding::HEXUPPER.encode(enc.bytes()));
+        Ok(())
     }
 }

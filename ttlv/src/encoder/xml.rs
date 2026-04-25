@@ -117,7 +117,7 @@ impl<T: BorrowMut<quick_xml::Writer<Vec<u8>>>, E: BorrowMut<Extensions>> Encoder
     }
     fn write_bigint(&mut self, tag: impl Tag, num: impl AsRef<[u8]>) -> crate::Result<()> {
         //TODO: Add padding ?
-        let hex_data = data_encoding::HEXUPPER.encode(num.as_ref());
+        let hex_data = data_encoding::HEXUPPER.encode(super::normalize_bigint(num.as_ref()));
         self.write_raw_value(tag, Type::BigInteger, &hex_data)
     }
     fn write_enum(&mut self, tag: impl Tag, value: impl Tag) -> crate::Result<()> {
@@ -217,6 +217,18 @@ mod tests {
 </TTLV>"#;
         let res = enc.into_string();
         assert_eq!(expect, res);
+        Ok(())
+    }
+
+    #[test]
+    fn test_empty_bigint_encoded_as_zero() -> crate::Result<()> {
+        let mut empty_enc = XmlEncoder::new();
+        empty_enc.write_bigint(0x420020u32, b"")?;
+
+        let mut zero_enc = XmlEncoder::new();
+        zero_enc.write_bigint(0x420020u32, [0u8])?;
+
+        assert_eq!(empty_enc.into_string(), zero_enc.into_string());
         Ok(())
     }
 }

@@ -72,6 +72,11 @@ pub trait TagEncodable {
 //     }
 // }
 
+/// Normalizes a BigInteger byte slice so the wire form is never empty.
+pub(crate) fn normalize_bigint(num: &[u8]) -> &[u8] {
+    if num.is_empty() { &[0] } else { num }
+}
+
 pub trait Encoder {
     type StructEncoder<'b>: Encoder;
     fn extensions(&mut self) -> &mut Extensions;
@@ -82,6 +87,10 @@ pub trait Encoder {
     ) -> crate::Result<()>;
     fn write_integer(&mut self, tag: impl Tag, value: i32) -> crate::Result<()>;
     fn write_long(&mut self, tag: impl Tag, value: i64) -> crate::Result<()>;
+    /// Encodes a BigInteger from a big-endian, two's-complement byte slice.
+    ///
+    /// An empty `num` is normalized to a single zero byte; the wire form is
+    /// never empty.
     fn write_bigint(&mut self, _tag: impl Tag, num: impl AsRef<[u8]>) -> crate::Result<()>;
     fn write_enum(&mut self, tag: impl Tag, value: impl Tag) -> crate::Result<()>;
     fn write_bool(&mut self, tag: impl Tag, value: bool) -> crate::Result<()>;
