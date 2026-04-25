@@ -76,7 +76,7 @@ pub enum Value<T: Tag = RawTag> {
     Structure(Struct<T>),
     Integer(i32),
     LongInteger(i64),
-    BigInteger(Vec<u8>),
+    BigInteger(#[cfg_attr(feature = "serde", serde_as(as = "serde_with::base64::Base64"))] Vec<u8>),
     Enum(RawTag),
     Boolean(bool),
     TextString(String),
