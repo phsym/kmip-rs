@@ -31,8 +31,8 @@ ttlv::bitmask! {
 }
 
 impl Encodable for CryptographicUsageMask {
-    fn encode(&self, encoder: &mut impl Encoder) {
-        encoder.write_bitmask(Tags::CryptographicUsageMask, *self);
+    fn encode(&self, encoder: &mut impl Encoder) -> ttlv::Result<()> {
+        encoder.write_bitmask(Tags::CryptographicUsageMask, *self)
     }
 }
 
@@ -53,8 +53,8 @@ ttlv::bitmask! {
 }
 
 impl Encodable for StorageStatusMask {
-    fn encode(&self, encoder: &mut impl Encoder) {
-        encoder.write_bitmask(Tags::StorageStatusMask, self.bits() as i32)
+    fn encode(&self, encoder: &mut impl Encoder) -> ttlv::Result<()> {
+        encoder.write_bitmask(Tags::StorageStatusMask, *self)
     }
 }
 

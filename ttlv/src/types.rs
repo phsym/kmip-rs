@@ -43,7 +43,7 @@ impl TryFrom<u8> for Type {
 pub struct Struct<T: Tag = RawTag>(pub Vec<TTLV<T>>);
 
 impl<T: Tag> TagEncodable for Struct<T> {
-    fn encode<E: Encoder>(&self, tag: impl Tag, encoder: &mut E) {
+    fn encode<E: Encoder>(&self, tag: impl Tag, encoder: &mut E) -> crate::Result<()> {
         encoder.write_struct(tag, |e| e.encode(&self.0))
     }
 }
@@ -103,8 +103,7 @@ impl<T: Tag> Value<T> {
 }
 
 impl<T: Tag> TagEncodable for Value<T> {
-    fn encode<E: Encoder>(&self, tag: impl Tag, encoder: &mut E) {
-        // let tag = tag.into();
+    fn encode<E: Encoder>(&self, tag: impl Tag, encoder: &mut E) -> crate::Result<()> {
         match self {
             Self::Structure(st) => encoder.tag_encode(tag, st),
             Self::Integer(i) => encoder.write_integer(tag, *i),
@@ -182,8 +181,8 @@ impl<T: Tag> TTLV<T> {
 // }
 
 impl<T: Tag> Encodable for TTLV<T> {
-    fn encode(&self, encoder: &mut impl Encoder) {
-        encoder.tag_encode(&self.tag, &self.val);
+    fn encode(&self, encoder: &mut impl Encoder) -> crate::Result<()> {
+        encoder.tag_encode(&self.tag, &self.val)
     }
 }
 

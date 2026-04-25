@@ -178,12 +178,13 @@ impl RequestBatchItem {
 }
 
 impl Encodable for RequestBatchItem {
-    fn encode(&self, encoder: &mut impl Encoder) {
+    fn encode(&self, encoder: &mut impl Encoder) -> ttlv::Result<()> {
         encoder.write_struct(Tags::BatchItem, |e| {
-            e.encode(&self.operation);
-            e.tag_encode(Tags::UniqueBatchItemID, &self.unique_batch_item_id);
-            e.encode(&self.request_payload);
-            e.encode(&self.message_extension);
+            e.encode(&self.operation)?;
+            e.tag_encode(Tags::UniqueBatchItemID, &self.unique_batch_item_id)?;
+            e.encode(&self.request_payload)?;
+            e.encode(&self.message_extension)?;
+            Ok(())
         })
     }
 }
@@ -220,19 +221,20 @@ pub struct ResponseBatchItem {
 }
 
 impl Encodable for ResponseBatchItem {
-    fn encode(&self, encoder: &mut impl Encoder) {
+    fn encode(&self, encoder: &mut impl Encoder) -> ttlv::Result<()> {
         encoder.write_struct(Tags::BatchItem, |e| {
-            e.encode(&self.operation);
-            e.tag_encode(Tags::UniqueBatchItemID, &self.unique_batch_item_id);
-            e.encode(&self.result_status);
-            e.encode(&self.result_reason);
-            e.tag_encode(Tags::ResultMessage, &self.result_message);
+            e.encode(&self.operation)?;
+            e.tag_encode(Tags::UniqueBatchItemID, &self.unique_batch_item_id)?;
+            e.encode(&self.result_status)?;
+            e.encode(&self.result_reason)?;
+            e.tag_encode(Tags::ResultMessage, &self.result_message)?;
             e.tag_encode(
                 Tags::AsynchronousCorrelationValue,
                 &self.asynchronous_correlation_value,
-            );
-            e.encode(&self.response_payload);
-            e.encode(&self.message_extension);
+            )?;
+            e.encode(&self.response_payload)?;
+            e.encode(&self.message_extension)?;
+            Ok(())
         })
     }
 }

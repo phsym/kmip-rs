@@ -20,28 +20,30 @@ fn test_struct_unit() {
     };
     let expected: TokenStream2 = parse_quote! {
         impl Toto {
-            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) {
+            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
                 match self {
-                    Self {} => {}
+                    Self {} => {
+                        ::ttlv::Result::Ok(())
+                    }
                 }
             }
         }
         impl ::ttlv::TagEncodable for Toto {
-            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) {
+            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) -> ::ttlv::Result<()> {
                 use ::ttlv::Encoder;
                 encoder.write_struct(tag, |e| {
-                    self.flatten_encode(e);
-                });
+                    self.flatten_encode(e)
+                })
             }
         }
         impl Toto {
-            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) {
+            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) -> ::ttlv::Result<()> {
                 self.inner_encode(e)
             }
         }
         impl ::ttlv::Encodable for Toto {
-            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) {
-                encoder.tag_encode(Tag::MyTag, self);
+            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
+                encoder.tag_encode(Tag::MyTag, self)
             }
         }
     };
@@ -63,34 +65,35 @@ fn test_struct_named() {
     };
     let expected: TokenStream2 = parse_quote! {
         impl Toto {
-            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) {
+            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
                 match self {
                     Self {
                         field1: _field1,
                         field2: _field2
                     } => {
-                        e.encode(_field1);
-                        e.tag_encode(42, _field2)
+                        e.encode(_field1)?;
+                        e.tag_encode(42, _field2)?;
+                        ::ttlv::Result::Ok(())
                     }
                 }
             }
         }
         impl ::ttlv::TagEncodable for Toto {
-            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) {
+            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) -> ::ttlv::Result<()> {
                 use ::ttlv::Encoder;
                 encoder.write_struct(tag, |e| {
-                    self.flatten_encode(e);
-                });
+                    self.flatten_encode(e)
+                })
             }
         }
         impl Toto {
-            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) {
+            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) -> ::ttlv::Result<()> {
                 self.inner_encode(e)
             }
         }
         impl ::ttlv::Encodable for Toto {
-            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) {
-                encoder.tag_encode(Tag::MyTag, self);
+            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
+                encoder.tag_encode(Tag::MyTag, self)
             }
         }
     };
@@ -108,31 +111,32 @@ fn test_struct_unnamed() {
     };
     let expected: TokenStream2 = parse_quote! {
         impl Toto {
-            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) {
+            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
                 match self {
                     Self { 0: _0, 1: _1 } => {
-                        e.encode(_0);
-                        e.tag_encode(42, _1)
+                        e.encode(_0)?;
+                        e.tag_encode(42, _1)?;
+                        ::ttlv::Result::Ok(())
                     }
                 }
             }
         }
         impl ::ttlv::TagEncodable for Toto {
-            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) {
+            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) -> ::ttlv::Result<()> {
                 use ::ttlv::Encoder;
                 encoder.write_struct(tag, |e| {
-                    self.flatten_encode(e);
-                });
+                    self.flatten_encode(e)
+                })
             }
         }
         impl Toto {
-            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) {
+            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) -> ::ttlv::Result<()> {
                 self.inner_encode(e)
             }
         }
         impl ::ttlv::Encodable for Toto {
-            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) {
-                encoder.tag_encode(Tag::MyTag, self);
+            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
+                encoder.tag_encode(Tag::MyTag, self)
             }
         }
     };
@@ -155,21 +159,22 @@ fn test_struct_flatten() {
     };
     let expected: TokenStream2 = parse_quote! {
         impl Toto {
-            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) {
+            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
                 match self {
                     Self {
                         field1: _field1,
                         field2: _field2
                     } => {
-                        e.encode(_field1);
-                        e.tag_encode(42, _field2)
+                        e.encode(_field1)?;
+                        e.tag_encode(42, _field2)?;
+                        ::ttlv::Result::Ok(())
                     }
                 }
             }
         }
         impl ::ttlv::Encodable for Toto {
-            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) {
-                self.inner_encode(encoder);
+            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
+                self.inner_encode(encoder)
             }
         }
     };
@@ -191,33 +196,34 @@ fn test_struct_skip() {
     };
     let expected: TokenStream2 = parse_quote! {
         impl Toto {
-            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) {
+            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
                 match self {
                     Self {
                         field1: _field1,
                         field2: _field2
                     } => {
-                        e.encode(_field1)
+                        e.encode(_field1)?;
+                        ::ttlv::Result::Ok(())
                     }
                 }
             }
         }
         impl ::ttlv::TagEncodable for Toto {
-            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) {
+            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) -> ::ttlv::Result<()> {
                 use ::ttlv::Encoder;
                 encoder.write_struct(tag, |e| {
-                    self.flatten_encode(e);
-                });
+                    self.flatten_encode(e)
+                })
             }
         }
         impl Toto {
-            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) {
+            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) -> ::ttlv::Result<()> {
                 self.inner_encode(e)
             }
         }
         impl ::ttlv::Encodable for Toto {
-            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) {
-                encoder.tag_encode(Tag::MyTag, self);
+            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
+                encoder.tag_encode(Tag::MyTag, self)
             }
         }
     };
@@ -241,41 +247,44 @@ fn test_struct_set_ext_and_if() {
     };
     let expected: TokenStream2 = parse_quote! {
         impl Toto {
-            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) where u32: ::std::clone::Clone {
+            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> where u32: ::std::clone::Clone {
                 match self {
                     Self {
                         field1: _field1,
                         field2: _field2
                     } => {
                         e.extensions().insert(_field1.clone());
-                        e.encode(_field1);
+                        e.encode(_field1)?;
                         {
                             use ::ttlv::ExtensionsExt;
                             let _ext = e.extensions();
                             if _ext.check() {
-                                e.tag_encode(42, _field2);
+                                e.tag_encode(42, _field2)
+                            } else {
+                                ::ttlv::Result::Ok(())
                             }
-                        }
+                        }?;
+                        ::ttlv::Result::Ok(())
                     }
                 }
             }
         }
         impl ::ttlv::TagEncodable for Toto {
-            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) {
+            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) -> ::ttlv::Result<()> {
                 use ::ttlv::Encoder;
                 encoder.write_struct(tag, |e| {
-                    self.flatten_encode(e);
-                });
+                    self.flatten_encode(e)
+                })
             }
         }
         impl Toto {
-            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) {
+            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) -> ::ttlv::Result<()> {
                 self.inner_encode(e)
             }
         }
         impl ::ttlv::Encodable for Toto {
-            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) {
-                encoder.tag_encode(Tag::MyTag, self);
+            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
+                encoder.tag_encode(Tag::MyTag, self)
             }
         }
     };
@@ -343,29 +352,33 @@ fn test_tagged_enum() {
     };
     let expected: TokenStream2 = parse_quote! {
         impl Toto {
-            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) {
+            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
                 match self {
-                    Self::Test1 {} => {},
-                    Self::Test2 {} => {}
-                };
+                    Self::Test1 {} => {
+                        ::ttlv::Result::Ok(())
+                    },
+                    Self::Test2 {} => {
+                        ::ttlv::Result::Ok(())
+                    }
+                }
             }
         }
         impl ::ttlv::TagEncodable for Toto {
-            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) {
+            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) -> ::ttlv::Result<()> {
                 use ::ttlv::Encoder;
                 encoder.write_struct(tag, |e| {
-                    self.flatten_encode(e);
-                });
+                    self.flatten_encode(e)
+                })
             }
         }
         impl Toto {
-            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) {
+            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) -> ::ttlv::Result<()> {
                 self.inner_encode(e)
             }
         }
         impl ::ttlv::Encodable for Toto {
-            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) {
-                encoder.tag_encode(Tag::MyTag, self);
+            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
+                encoder.tag_encode(Tag::MyTag, self)
             }
         }
     };
@@ -385,23 +398,27 @@ fn test_untagged_enum() {
     };
     let expected: TokenStream2 = parse_quote! {
         impl Toto {
-            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) {
+            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
                 match self {
-                    Self::Test1 {} => {},
-                    Self::Test2 {} => {}
-                };
+                    Self::Test1 {} => {
+                        ::ttlv::Result::Ok(())
+                    },
+                    Self::Test2 {} => {
+                        ::ttlv::Result::Ok(())
+                    }
+                }
             }
         }
         impl ::ttlv::TagEncodable for Toto {
-            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) {
+            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) -> ::ttlv::Result<()> {
                 use ::ttlv::Encoder;
                 encoder.write_struct(tag, |e| {
-                    self.flatten_encode(e);
-                });
+                    self.flatten_encode(e)
+                })
             }
         }
         impl Toto {
-            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) {
+            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) -> ::ttlv::Result<()> {
                 self.inner_encode(e)
             }
         }
@@ -424,20 +441,22 @@ fn test_flatten_enum() {
     };
     let expected: TokenStream2 = parse_quote! {
         impl Toto {
-            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) {
+            fn inner_encode(&self, e: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
                 match self {
                     Self::Test1 { 0: _0 } => {
-                        e.tag_encode(1, _0)
+                        e.tag_encode(1, _0)?;
+                        ::ttlv::Result::Ok(())
                     },
                     Self::Test2 { 0: _0 } => {
-                        e.tag_encode(2, _0)
+                        e.tag_encode(2, _0)?;
+                        ::ttlv::Result::Ok(())
                     }
-                };
+                }
             }
         }
         impl ::ttlv::Encodable for Toto {
-            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) {
-                self.inner_encode(encoder);
+            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
+                self.inner_encode(encoder)
             }
         }
     };
@@ -462,17 +481,17 @@ fn test_ttlv_enum() {
     };
     let expected: TokenStream2 = parse_quote! {
         impl ::ttlv::TagEncodable for Toto {
-            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) {
+            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) -> ::ttlv::Result<()> {
                 let value = match self {
                     Self::Test1 => (1, ::std::stringify!(Test1)),
                     Self::Test2 => (12, ::std::stringify!(Test2))
                 };
-                encoder.write_enum(tag, value);
+                encoder.write_enum(tag, value)
             }
         }
         impl ::ttlv::Encodable for Toto {
-            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) {
-                encoder.tag_encode(Tags::MyTag, self);
+            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
+                encoder.tag_encode(Tags::MyTag, self)
             }
         }
     };
@@ -497,18 +516,18 @@ fn test_ttlv_enum_with_default_and_rename() {
     };
     let expected: TokenStream2 = parse_quote! {
         impl ::ttlv::TagEncodable for Toto {
-            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) {
+            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) -> ::ttlv::Result<()> {
                 let value = match self {
                     Self::Test1 => (1, ::std::stringify!(Test1)),
                     Self::Test2 => (12, "foo"),
                     Self::Unknown(value) => return encoder.write_enum(tag, value)
                 };
-                encoder.write_enum(tag, value);
+                encoder.write_enum(tag, value)
             }
         }
         impl ::ttlv::Encodable for Toto {
-            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) {
-                encoder.tag_encode(Tags::MyTag, self);
+            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
+                encoder.tag_encode(Tags::MyTag, self)
             }
         }
     };

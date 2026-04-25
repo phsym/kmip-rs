@@ -79,6 +79,11 @@ pub enum Error {
     MissingTag,
     #[error("Value is missing")]
     MissingValue,
+    #[error("tag {tag} has no numeric form (required by encoder)")]
+    TagMissingNumeric { tag: RawTag },
+    #[cfg(feature = "chrono")]
+    #[error("Unix timestamp {0} is out of range")]
+    DateTimeOutOfRange(i64),
     #[error(transparent)]
     InvalidInteger(#[from] ParseIntError),
     #[error(transparent)]

@@ -357,7 +357,7 @@ pub struct DebugMiddleware;
 
 impl Middleware for DebugMiddleware {
     fn call(&self, next: Next, req: &RequestMessage) -> Result<ResponseMessage> {
-        let xml_req = XmlEncoder::encode_to_string(req);
+        let xml_req = XmlEncoder::encode_to_string(req)?;
         // println!("request: {msg:#?}");
         println!("Request:\n{xml_req}");
         let now = Instant::now();
@@ -369,7 +369,7 @@ impl Middleware for DebugMiddleware {
 
         let elapsed = now.elapsed().as_millis();
 
-        let xml_resp = XmlEncoder::encode_to_string(&response);
+        let xml_resp = XmlEncoder::encode_to_string(&response)?;
         println!("\nResponse in {elapsed}ms:\n{xml_resp}\n");
         // println!("\nresponse in {elapsed}ms:\n{response:#?}");
 
