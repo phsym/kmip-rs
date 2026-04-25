@@ -122,7 +122,7 @@ impl Encoder for TextEncoder {
     }
 
     fn write_bigint(&mut self, tag: impl Tag, num: impl AsRef<[u8]>) -> crate::Result<()> {
-        let hex_data = data_encoding::HEXUPPER.encode(num.as_ref());
+        let hex_data = data_encoding::HEXUPPER.encode(super::normalize_bigint(num.as_ref()));
         self.encode_raw(Type::BigInteger, tag, hex_data)
     }
 
@@ -252,5 +252,17 @@ mod tests {
         let mut enc = TextEncoder::new();
         let err = enc.write_datetime(0x420020, i64::MAX).unwrap_err();
         assert!(matches!(err, Error::DateTimeOutOfRange(_)));
+    }
+
+    #[test]
+    fn test_empty_bigint_encoded_as_zero() -> crate::Result<()> {
+        let mut empty_enc = TextEncoder::new();
+        empty_enc.write_bigint(0x420020u32, b"")?;
+
+        let mut zero_enc = TextEncoder::new();
+        zero_enc.write_bigint(0x420020u32, [0u8])?;
+
+        assert_eq!(empty_enc.into_string(), zero_enc.into_string());
+        Ok(())
     }
 }
