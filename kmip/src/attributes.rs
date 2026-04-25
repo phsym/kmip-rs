@@ -184,7 +184,7 @@ macro_rules! impl_attributes {
         )*
 
         impl Encodable for AttributeValue {
-            fn encode(&self, encoder: &mut impl Encoder) {
+            fn encode(&self, encoder: &mut impl Encoder) -> ttlv::Result<()> {
                 match self {
                     $(
                         Self::$ident(value) => encoder.tag_encode(Tags::AttributeValue, value),
@@ -360,8 +360,8 @@ macro_rules! wrap_attr_type {
             }
 
             impl ttlv::TagEncodable for $ident {
-                fn encode<E: Encoder>(&self, tag: impl ttlv::Tag, encoder: &mut E) {
-                    encoder.tag_encode(tag, &self.0);
+                fn encode<E: Encoder>(&self, tag: impl ttlv::Tag, encoder: &mut E) -> ttlv::Result<()> {
+                    encoder.tag_encode(tag, &self.0)
                 }
             }
 

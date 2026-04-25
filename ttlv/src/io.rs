@@ -38,7 +38,7 @@ impl<IO: std::io::Write + std::io::Read> Stream<IO> {
 impl<IO: std::io::Write> Stream<IO> {
     pub fn send(&mut self, msg: &impl Encodable) -> Result<()> {
         let mut encoder = TtlvEncoder::new();
-        encoder.encode(msg);
+        encoder.encode(msg)?;
         self.io.write_all(encoder.bytes())?;
         self.io.flush()?;
         Ok(())

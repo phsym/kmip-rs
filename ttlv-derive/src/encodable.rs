@@ -105,15 +105,27 @@ fn derive_enum_enum(en: DataEnum, ident: Ident, enum_attr: EnumEnumAttr) -> Resu
         }
     }
 
-    let write_enum = has_branches.then_some(quote! {encoder.write_enum(tag, value);});
+    let body = if has_branches {
+        quote! {
+            let value = match self {
+                #(#branches), *
+            };
+            encoder.write_enum(tag, value)
+        }
+    } else {
+        // No non-default branches: every arm diverges (or the match is empty).
+        // The match itself produces `!`, which coerces to `Result<(), _>`.
+        quote! {
+            match self {
+                #(#branches), *
+            }
+        }
+    };
 
     let mut impls = vec![quote! {
         impl ::ttlv::TagEncodable for #ident {
-            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) {
-                let value = match self {
-                    #(#branches), *
-                };
-                #write_enum
+            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) -> ::ttlv::Result<()> {
+                #body
             }
         }
     }];
@@ -145,7 +157,7 @@ fn derive_enum_struct(en: DataEnum, ident: Ident, struct_attr: StructAttr) -> Re
         quote! {
             match self {
                 #(#branches), *
-            };
+            }
         },
         &set_ext_types,
     )];
@@ -219,7 +231,9 @@ fn impl_fields_encode(
                     use ::ttlv::ExtensionsExt;
                     let _ext = #encoder.extensions();
                     if #filter {
-                        #call;
+                        #call
+                    } else {
+                        ::ttlv::Result::Ok(())
                     }
                 }
             };
@@ -229,11 +243,13 @@ fn impl_fields_encode(
 
     let branch = if let Some(varname) = variant {
         quote! {Self::#varname{#(#bindings), *} => {
-            #(#stmts); *
+            #(#stmts ?;)*
+            ::ttlv::Result::Ok(())
         }}
     } else {
         quote! {Self{#(#bindings), *} => {
-            #(#stmts); *
+            #(#stmts ?;)*
+            ::ttlv::Result::Ok(())
         }}
     };
     Ok((branch, set_ext_types))
@@ -258,7 +274,7 @@ fn impl_inner_encode(
     let where_clause = clone_bounds_where_clause(set_ext_types);
     quote! {
         impl #ident {
-            fn inner_encode(&self, #encoder: &mut impl ::ttlv::Encoder) #where_clause {
+            fn inner_encode(&self, #encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> #where_clause {
                 #body
             }
         }
@@ -270,16 +286,16 @@ fn impl_inner_encode(
 fn impl_tag_encodable(ident: &Ident) -> TokenStream2 {
     quote! {
         impl ::ttlv::TagEncodable for #ident {
-            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) {
+            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) -> ::ttlv::Result<()> {
                 use ::ttlv::Encoder;
                 encoder.write_struct(tag, |e| {
-                    self.flatten_encode(e);
-                });
+                    self.flatten_encode(e)
+                })
             }
         }
 
         impl #ident {
-            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) {
+            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) -> ::ttlv::Result<()> {
                 self.inner_encode(e)
             }
         }
@@ -290,8 +306,8 @@ fn impl_tag_encodable(ident: &Ident) -> TokenStream2 {
 fn impl_encodable(ident: &Ident, tag: &Expr) -> TokenStream2 {
     quote! {
         impl ::ttlv::Encodable for #ident {
-            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) {
-                encoder.tag_encode(#tag, self);
+            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
+                encoder.tag_encode(#tag, self)
             }
         }
     }
@@ -302,8 +318,8 @@ fn impl_encodable(ident: &Ident, tag: &Expr) -> TokenStream2 {
 fn impl_flattened_encode(ident: &Ident) -> TokenStream2 {
     quote! {
         impl ::ttlv::Encodable for #ident {
-            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) {
-                self.inner_encode(encoder);
+            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
+                self.inner_encode(encoder)
             }
         }
     }

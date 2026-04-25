@@ -1,6 +1,6 @@
 use std::{fmt::Display, io::Write};
 
-use crate::{Bitmask, Tag, Type};
+use crate::{Bitmask, Error, Tag, Type};
 
 use super::{Encodable, Encoder};
 use chrono::Duration;
@@ -15,10 +15,10 @@ pub struct TextEncoder {
 }
 
 impl TextEncoder {
-    pub fn encode_to_string(v: &impl Encodable) -> String {
+    pub fn encode_to_string(v: &impl Encodable) -> crate::Result<String> {
         let mut enc = Self::new();
-        enc.encode(v);
-        enc.into_string()
+        enc.encode(v)?;
+        Ok(enc.into_string())
     }
 
     pub fn new() -> Self {
@@ -50,34 +50,41 @@ impl TextEncoder {
         }
     }
 
-    fn start_elem(&mut self, ty: Type, tag: impl Tag) {
+    fn start_elem(&mut self, ty: Type, tag: impl Tag) -> crate::Result<()> {
         if !self.buf.is_empty() {
             writeln!(self.buf).unwrap();
         }
         self.write_indent();
         let tg = match tag.name() {
             Some(name) => name.to_string(),
-            None => format!("{:#08X}", tag.numeric().unwrap()),
+            None => format!("{:#08X}", tag.numeric_or_err()?),
         };
         write!(self.buf, "{tg}").unwrap();
         if !self.no_type {
             write!(self.buf, " ({ty})").unwrap();
         }
         write!(self.buf, ": ").unwrap();
+        Ok(())
     }
 
     fn end_elem(&mut self) {
         // writeln!(self.buf).unwrap();
     }
 
-    fn encode_raw_fn(&mut self, ty: Type, tag: impl Tag, value: impl FnOnce(&mut Vec<u8>)) {
-        self.start_elem(ty, tag);
+    fn encode_raw_fn(
+        &mut self,
+        ty: Type,
+        tag: impl Tag,
+        value: impl FnOnce(&mut Vec<u8>),
+    ) -> crate::Result<()> {
+        self.start_elem(ty, tag)?;
         value(&mut self.buf);
         self.end_elem();
+        Ok(())
     }
 
-    fn encode_raw(&mut self, ty: Type, tag: impl Tag, value: impl Display) {
-        self.encode_raw_fn(ty, tag, |buf| write!(buf, "{value}").unwrap());
+    fn encode_raw(&mut self, ty: Type, tag: impl Tag, value: impl Display) -> crate::Result<()> {
+        self.encode_raw_fn(ty, tag, |buf| write!(buf, "{value}").unwrap())
     }
 }
 
@@ -88,65 +95,72 @@ impl Encoder for TextEncoder {
         &mut self.ext
     }
 
-    fn write_struct(&mut self, tag: impl Tag, f: impl FnOnce(&mut Self::StructEncoder<'_>)) {
-        self.start_elem(Type::Structure, tag);
+    fn write_struct(
+        &mut self,
+        tag: impl Tag,
+        f: impl FnOnce(&mut Self::StructEncoder<'_>) -> crate::Result<()>,
+    ) -> crate::Result<()> {
+        self.start_elem(Type::Structure, tag)?;
         self.indent += 1;
         let olen = self.buf.len();
-        f(self);
+        f(self)?;
         if olen == self.buf.len() {
             writeln!(self.buf).unwrap();
             self.write_indent();
             write!(self.buf, "... empty ...").unwrap();
         }
         self.indent -= 1;
+        Ok(())
     }
 
-    fn write_integer(&mut self, tag: impl Tag, value: i32) {
-        self.encode_raw(Type::Integer, tag, value);
+    fn write_integer(&mut self, tag: impl Tag, value: i32) -> crate::Result<()> {
+        self.encode_raw(Type::Integer, tag, value)
     }
 
-    fn write_long(&mut self, tag: impl Tag, value: i64) {
-        self.encode_raw(Type::LongInteger, tag, value);
+    fn write_long(&mut self, tag: impl Tag, value: i64) -> crate::Result<()> {
+        self.encode_raw(Type::LongInteger, tag, value)
     }
 
-    fn write_bigint(&mut self, tag: impl Tag, num: impl AsRef<[u8]>) {
+    fn write_bigint(&mut self, tag: impl Tag, num: impl AsRef<[u8]>) -> crate::Result<()> {
         let hex_data = data_encoding::HEXUPPER.encode(num.as_ref());
-        self.encode_raw(Type::BigInteger, tag, hex_data);
+        self.encode_raw(Type::BigInteger, tag, hex_data)
     }
 
-    fn write_enum(&mut self, tag: impl Tag, value: impl Tag) {
+    fn write_enum(&mut self, tag: impl Tag, value: impl Tag) -> crate::Result<()> {
         if let Some(s) = value.name() {
-            self.encode_raw(Type::Enumeration, tag, s);
+            self.encode_raw(Type::Enumeration, tag, s)
         } else {
+            let v = value.numeric_or_err()?;
             self.encode_raw_fn(Type::Enumeration, tag, |buf| {
-                write!(buf, "{:#010X}", value.numeric().unwrap()).unwrap()
-            });
+                write!(buf, "{v:#010X}").unwrap()
+            })
         }
     }
 
-    fn write_bool(&mut self, tag: impl Tag, value: bool) {
-        self.encode_raw(Type::Boolean, tag, value);
+    fn write_bool(&mut self, tag: impl Tag, value: bool) -> crate::Result<()> {
+        self.encode_raw(Type::Boolean, tag, value)
     }
 
-    fn write_string(&mut self, tag: impl Tag, s: impl AsRef<str>) {
-        self.encode_raw(Type::TextString, tag, s.as_ref());
+    fn write_string(&mut self, tag: impl Tag, s: impl AsRef<str>) -> crate::Result<()> {
+        self.encode_raw(Type::TextString, tag, s.as_ref())
     }
 
-    fn write_bytes(&mut self, tag: impl Tag, s: impl AsRef<[u8]>) {
+    fn write_bytes(&mut self, tag: impl Tag, s: impl AsRef<[u8]>) -> crate::Result<()> {
         let hex_data = data_encoding::HEXUPPER.encode(s.as_ref());
-        self.encode_raw(Type::ByteString, tag, hex_data);
+        self.encode_raw(Type::ByteString, tag, hex_data)
     }
 
-    fn write_datetime(&mut self, tag: impl Tag, date: i64) {
-        let dt = chrono::DateTime::from_timestamp(date, 0).unwrap();
+    fn write_datetime(&mut self, tag: impl Tag, date: i64) -> crate::Result<()> {
+        let dt =
+            chrono::DateTime::from_timestamp(date, 0).ok_or(Error::DateTimeOutOfRange(date))?;
         self.encode_raw(
             Type::DateTime,
             tag,
             dt.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
-        );
+        )
     }
 
-    fn write_interval(&mut self, tag: impl Tag, seconds: u32) {
+    fn write_interval(&mut self, tag: impl Tag, seconds: u32) -> crate::Result<()> {
         let dur = Duration::seconds(seconds.into());
         let mut sdur = Vec::new();
 
@@ -162,11 +176,11 @@ impl Encoder for TextEncoder {
         if sdur.is_empty() || dur.num_seconds() % 60 > 0 {
             write!(sdur, "{}s", dur.num_seconds() % 60).unwrap();
         }
-        self.encode_raw(Type::Interval, tag, String::from_utf8(sdur).unwrap());
+        self.encode_raw(Type::Interval, tag, String::from_utf8(sdur).unwrap())
     }
 
-    fn write_bitmask(&mut self, tag: impl Tag, value: impl Bitmask) {
-        self.encode_raw(Type::Integer, tag, value.format(" | "));
+    fn write_bitmask(&mut self, tag: impl Tag, value: impl Bitmask) -> crate::Result<()> {
+        self.encode_raw(Type::Integer, tag, value.format(" | "))
     }
 }
 
@@ -185,33 +199,34 @@ mod tests {
     }
 
     #[test]
-    fn test_text_encoder() {
+    fn test_text_encoder() -> crate::Result<()> {
         let dt = chrono::NaiveDateTime::new(
             chrono::NaiveDate::from_ymd_opt(2024, 9, 16).unwrap(),
             chrono::NaiveTime::from_hms_opt(15, 7, 42).unwrap(),
         );
         let mut enc = TextEncoder::new();
         enc.write_struct("Toto", |enc| {
-            enc.write_integer(0x2341, 12);
-            enc.write_long(0x7634, 1234567890);
-            enc.write_bool(0x7777, true);
-            enc.write_struct(0x3333, |_| {});
-            enc.write_string(0x8888, "hello world");
-            enc.write_bytes(0x9999, [1, 2, 3, 4]);
-            enc.write_datetime(0x3456, dt.and_utc().timestamp());
-            enc.write_interval(0x8724, 3 * 60 + 42);
+            enc.write_integer(0x2341, 12)?;
+            enc.write_long(0x7634, 1234567890)?;
+            enc.write_bool(0x7777, true)?;
+            enc.write_struct(0x3333, |_| Ok(()))?;
+            enc.write_string(0x8888, "hello world")?;
+            enc.write_bytes(0x9999, [1, 2, 3, 4])?;
+            enc.write_datetime(0x3456, dt.and_utc().timestamp())?;
+            enc.write_interval(0x8724, 3 * 60 + 42)?;
             enc.write_bigint(
                 0x872573,
                 BigInteger::unsigned(0xdeadbeefu64.to_be_bytes().into()).0,
-            );
+            )?;
             enc.write_bigint(
                 0x872574,
                 BigInteger::signed((-0xdeadbeefi64).to_be_bytes().into()).0,
-            );
-            enc.write_bitmask(0x5642, 1 | 2);
-            enc.write_bitmask(0x5643, MyBitmask::all() | MyBitmask::from_bits_retain(4));
-            enc.write_enum(0x67342, 12);
-        });
+            )?;
+            enc.write_bitmask(0x5642, 1 | 2)?;
+            enc.write_bitmask(0x5643, MyBitmask::all() | MyBitmask::from_bits_retain(4))?;
+            enc.write_enum(0x67342, 12)?;
+            Ok(())
+        })?;
 
         let expect = "Toto (Structure): 
     0x002341 (Integer): 12
@@ -229,5 +244,13 @@ mod tests {
     0x005643 (Integer): Foo | Bar | 0x00000004
     0x067342 (Enumeration): 0x0000000C";
         assert_eq!(expect, enc.into_string());
+        Ok(())
+    }
+
+    #[test]
+    fn test_datetime_out_of_range_errors() {
+        let mut enc = TextEncoder::new();
+        let err = enc.write_datetime(0x420020, i64::MAX).unwrap_err();
+        assert!(matches!(err, Error::DateTimeOutOfRange(_)));
     }
 }

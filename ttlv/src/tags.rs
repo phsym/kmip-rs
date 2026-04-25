@@ -127,6 +127,11 @@ pub trait Tag {
             },
         }
     }
+    fn numeric_or_err(&self) -> crate::Result<u32> {
+        self.numeric().ok_or_else(|| Error::TagMissingNumeric {
+            tag: self.raw().to_owned(),
+        })
+    }
 }
 
 impl<T: Tag> Tag for &T {

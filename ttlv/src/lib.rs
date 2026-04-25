@@ -258,7 +258,7 @@ macro_rules! bitmask {
         }
 
         impl $crate::TagEncodable for $BitFlags {
-            fn encode<E: $crate::Encoder>(&self, tag: impl $crate::Tag, encoder: &mut E) {
+            fn encode<E: $crate::Encoder>(&self, tag: impl $crate::Tag, encoder: &mut E) -> $crate::Result<()> {
                 encoder.write_bitmask(tag, *self)
             }
         }
