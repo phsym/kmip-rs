@@ -22,6 +22,14 @@ pub use types::*;
 #[cfg(feature = "derive")]
 pub use ttlv_derive::*;
 
+/// KMIP wire-format item alignment, in bytes.
+pub(crate) const ITEM_ALIGN: usize = 8;
+
+/// Bytes of zero-padding needed to round `len` up to [`ITEM_ALIGN`].
+pub(crate) const fn pad_for_len(len: usize) -> usize {
+    (ITEM_ALIGN - len % ITEM_ALIGN) % ITEM_ALIGN
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(

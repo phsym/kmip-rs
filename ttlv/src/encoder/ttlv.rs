@@ -51,10 +51,6 @@ impl TtlvEncoder {
         self.write((len as u32).to_be_bytes());
     }
 
-    const fn pad_for_len(l: usize) -> usize {
-        (8 - l % 8) % 8
-    }
-
     fn pad(&mut self, n: usize, value: u8) {
         self.buf.extend(iter::repeat_n(value, n))
     }
@@ -92,17 +88,10 @@ impl Encoder for TtlvEncoder {
     }
 
     fn write_bigint(&mut self, tag: impl Tag, num: impl AsRef<[u8]>) -> crate::Result<()> {
-        let num = super::normalize_bigint(num.as_ref());
+        let (pad, pad_len, num) = super::bigint_padding(num.as_ref());
         self.write_tag(tag.numeric_or_err()?);
         self.write_type(Type::BigInteger);
-        let pad_len = Self::pad_for_len(num.len());
-        self.write_length(num.len() + pad_len);
-        // Extend sign
-        let pad = if (num[0] >> 7) & 0x01 == 0x01 {
-            0xFF
-        } else {
-            0
-        };
+        self.write_length(pad_len + num.len());
         self.pad(pad_len, pad);
         self.write(num);
         Ok(())
@@ -142,14 +131,14 @@ impl Encoder for TtlvEncoder {
     fn write_string(&mut self, tag: impl Tag, s: impl AsRef<str>) -> crate::Result<()> {
         let s = s.as_ref();
         self.raw_encode(tag, Type::TextString, s.len(), s)?;
-        self.pad(Self::pad_for_len(s.len()), 0);
+        self.pad(crate::pad_for_len(s.len()), 0);
         Ok(())
     }
 
     fn write_bytes(&mut self, tag: impl Tag, s: impl AsRef<[u8]>) -> crate::Result<()> {
         let s = s.as_ref();
         self.raw_encode(tag, Type::ByteString, s.len(), s)?;
-        self.pad(Self::pad_for_len(s.len()), 0);
+        self.pad(crate::pad_for_len(s.len()), 0);
         Ok(())
     }
 
@@ -195,34 +184,6 @@ mod tests {
         assert_eq!(expected, data_encoding::HEXUPPER.encode(enc.bytes()));
         Ok(())
     }
-
-    /*
-       fn TestEncodeBigInteger() {
-       t.Run("positive", fn() {
-           let mut enc = Encoder::new();
-           b := big.NewInt(0)
-           b.SetString("1234567890000000000000000000", 10)
-           enc.BigInteger(0x420020, b)
-           let expected = hex("42 00 20 | 04 | 00 00 00 10 | 00 00 00 00 03 FD 35 EB 6B C2 DF 46 18 08 00 00")
-           assert_eq!(expected, data_encoding::HEXUPPER.encode(enc.bytes()));
-       })
-       // t.Run("zero", fn() {
-       // 	let mut enc = Encoder::new();
-       // 	b := big.NewInt(0)
-       // 	enc.EncodeBigInteger(0x420020, b)
-       // 	expected := "42002004000000100000000003FD35EB6BC2DF4618080000"
-       // 	assert_eq!(expected, data_encoding::HEXUPPER.encode(enc.bytes()));
-       // })
-       // t.Run("negative", fn() {
-       // 	let mut enc = Encoder::new();
-       // 	b := big.NewInt(0)
-       // 	b.SetString("-1234567890000000000000000000", 10)
-       // 	enc.EncodeBigInteger(0x420020, b)
-       // 	expected := "42002004000000100000000003FD35EB6BC2DF4618080000"
-       // 	assert_eq!(expected, data_encoding::HEXUPPER.encode(enc.bytes()));
-       // })
-       }
-    */
 
     #[test]
     fn test_encode_enum() -> crate::Result<()> {
@@ -351,6 +312,31 @@ mod tests {
         assert_eq!(zero_enc.bytes(), enc.bytes());
 
         let expected = hex("42 00 20 | 04 | 00 00 00 08 | 00 00 00 00 00 00 00 00");
+        assert_eq!(expected, data_encoding::HEXUPPER.encode(enc.bytes()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_encode_bigint_sign_extended() -> crate::Result<()> {
+        // Single-byte positive: zero-extend to 8 bytes.
+        let mut enc = TtlvEncoder::new();
+        enc.write_bigint(0x420020u32, [0x42])?;
+        let expected = hex("42 00 20 | 04 | 00 00 00 08 | 00 00 00 00 00 00 00 42");
+        assert_eq!(expected, data_encoding::HEXUPPER.encode(enc.bytes()));
+
+        // Single-byte negative (high bit set): sign-extend with 0xFF.
+        let mut enc = TtlvEncoder::new();
+        enc.write_bigint(0x420020u32, [0x80])?;
+        let expected = hex("42 00 20 | 04 | 00 00 00 08 | FF FF FF FF FF FF FF 80");
+        assert_eq!(expected, data_encoding::HEXUPPER.encode(enc.bytes()));
+
+        // Already 8-byte aligned: no padding.
+        let mut enc = TtlvEncoder::new();
+        enc.write_bigint(
+            0x420020u32,
+            [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
+        )?;
+        let expected = hex("42 00 20 | 04 | 00 00 00 08 | 01 02 03 04 05 06 07 08");
         assert_eq!(expected, data_encoding::HEXUPPER.encode(enc.bytes()));
         Ok(())
     }

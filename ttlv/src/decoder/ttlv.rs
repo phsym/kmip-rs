@@ -29,13 +29,9 @@ impl<E: BorrowMut<Extensions>> TtlvDecoder<'_, E> {
         Ok(())
     }
 
-    const fn pad_for_len(l: usize) -> usize {
-        (8 - l % 8) % 8
-    }
-
     pub fn padded_len(&self) -> Result<usize> {
         let l = self.len()?;
-        Ok(l + Self::pad_for_len(l))
+        Ok(l + crate::pad_for_len(l))
     }
 
     fn raw_tag(&self) -> Result<u32> {

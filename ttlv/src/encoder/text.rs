@@ -122,8 +122,7 @@ impl Encoder for TextEncoder {
     }
 
     fn write_bigint(&mut self, tag: impl Tag, num: impl AsRef<[u8]>) -> crate::Result<()> {
-        let hex_data = data_encoding::HEXUPPER.encode(super::normalize_bigint(num.as_ref()));
-        self.encode_raw(Type::BigInteger, tag, hex_data)
+        self.encode_raw(Type::BigInteger, tag, super::bigint_hex(num.as_ref()))
     }
 
     fn write_enum(&mut self, tag: impl Tag, value: impl Tag) -> crate::Result<()> {
