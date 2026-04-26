@@ -77,6 +77,33 @@ pub(crate) fn normalize_bigint(num: &[u8]) -> &[u8] {
     if num.is_empty() { &[0] } else { num }
 }
 
+/// Computes the sign-extension padding required to align a BigInteger
+/// (interpreted as big-endian two's-complement) to a multiple of 8 bytes
+/// per the KMIP wire format.
+///
+/// Returns `(pad_byte, pad_len, num)`. `num` is the input normalized via
+/// [`normalize_bigint`] (never empty). Callers should emit `pad_byte`
+/// repeated `pad_len` times (always in `0..8`) followed by `num`.
+pub(crate) fn bigint_padding(num: &[u8]) -> (u8, usize, &[u8]) {
+    let num = normalize_bigint(num);
+    let pad_len = crate::pad_for_len(num.len());
+    let pad = if num[0] & 0x80 != 0 { 0xFF } else { 0x00 };
+    (pad, pad_len, num)
+}
+
+/// Hex-encodes a BigInteger sign-extended to a multiple of 8 bytes, per
+/// KMIP Additional Message Encodings v1.0 §6.1.6.6 (BigInteger XML form).
+#[cfg(any(feature = "xml", feature = "text"))]
+pub(crate) fn bigint_hex(num: &[u8]) -> String {
+    let (pad, pad_len, num) = bigint_padding(num);
+    debug_assert!(pad_len < crate::ITEM_ALIGN);
+    let pad_bytes = [pad; crate::ITEM_ALIGN - 1];
+    let mut hex = String::with_capacity((pad_len + num.len()) * 2);
+    data_encoding::HEXUPPER.encode_append(&pad_bytes[..pad_len], &mut hex);
+    data_encoding::HEXUPPER.encode_append(num, &mut hex);
+    hex
+}
+
 pub trait Encoder {
     type StructEncoder<'b>: Encoder;
     fn extensions(&mut self) -> &mut Extensions;

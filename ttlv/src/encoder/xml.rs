@@ -116,9 +116,7 @@ impl<T: BorrowMut<quick_xml::Writer<Vec<u8>>>, E: BorrowMut<Extensions>> Encoder
         self.write_raw_value(tag, Type::LongInteger, &value.to_string())
     }
     fn write_bigint(&mut self, tag: impl Tag, num: impl AsRef<[u8]>) -> crate::Result<()> {
-        //TODO: Add padding ?
-        let hex_data = data_encoding::HEXUPPER.encode(super::normalize_bigint(num.as_ref()));
-        self.write_raw_value(tag, Type::BigInteger, &hex_data)
+        self.write_raw_value(tag, Type::BigInteger, &super::bigint_hex(num.as_ref()))
     }
     fn write_enum(&mut self, tag: impl Tag, value: impl Tag) -> crate::Result<()> {
         if let Some(s) = value.name() {
@@ -229,6 +227,36 @@ mod tests {
         zero_enc.write_bigint(0x420020u32, [0u8])?;
 
         assert_eq!(empty_enc.into_string(), zero_enc.into_string());
+        Ok(())
+    }
+
+    #[test]
+    fn test_bigint_padded_to_8_bytes() -> crate::Result<()> {
+        // KMIP Additional Message Encodings v1.0 §6.1.6.6: BigInteger XML
+        // values are sign-extended to a multiple of 8 bytes (16 hex chars).
+        let cases: &[(&[u8], &str)] = &[
+            // Zero — spec example.
+            (&[], "0000000000000000"),
+            (&[0x00], "0000000000000000"),
+            // Single-byte positive: sign-extend with 0x00.
+            (&[0x42], "0000000000000042"),
+            // Single-byte negative (high bit set): sign-extend with 0xFF.
+            (&[0xFF], "FFFFFFFFFFFFFFFF"),
+            (&[0x80], "FFFFFFFFFFFFFF80"),
+            // Already a multiple of 8 bytes: no padding added.
+            (
+                &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
+                "0102030405060708",
+            ),
+        ];
+        for (input, expected_hex) in cases {
+            let mut enc = XmlEncoder::new();
+            enc.write_bigint(0x420020u32, input)?;
+            let xml = enc.into_string();
+            let expected =
+                format!(r#"<TTLV type="BigInteger" tag="0x420020" value="{expected_hex}"/>"#);
+            assert_eq!(xml, expected, "input = {input:?}");
+        }
         Ok(())
     }
 }
