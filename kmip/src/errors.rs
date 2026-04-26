@@ -20,6 +20,8 @@ pub enum Error {
     MissingBatchItem,
     #[error("Batch count mismatch (expected: {expected}, got: {got})")]
     BatchCountMismatch { expected: i32, got: usize },
+    #[error("Batch count {0} exceeds i32::MAX")]
+    BatchCountOverflow(usize),
     #[error("The payload is missing from the response")]
     MissingResponsePayload,
     #[error("Unexpected response payload (want: {want})")]

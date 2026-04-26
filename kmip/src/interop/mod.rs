@@ -51,6 +51,8 @@ pub enum KeyError {
     InvalidKeyBlock,
     #[error("Unsupported wrapped key block")]
     UnsupportedWrappedBlock,
+    #[error("Key length too large to encode as i32")]
+    KeyLengthOverflow,
     #[error(transparent)]
     Kmip(#[from] crate::errors::Error),
     #[error(transparent)]
@@ -75,6 +77,25 @@ impl KeyError {
     {
         Self::ConversionError(Box::new(err))
     }
+}
+
+/// Narrow `n` to `i32`, mapping overflow to [`KeyError::KeyLengthOverflow`].
+pub(crate) fn bits_to_i32<N>(n: N) -> Result<i32, KeyError>
+where
+    i32: TryFrom<N>,
+{
+    i32::try_from(n).map_err(|_| KeyError::KeyLengthOverflow)
+}
+
+/// Convert a byte count into its bit-length as `i32`, checking for overflow at
+/// both the narrowing conversion and the `* 8` multiplication.
+pub(crate) fn bytes_to_bit_length<N>(bytes: N) -> Result<i32, KeyError>
+where
+    i32: TryFrom<N>,
+{
+    bits_to_i32(bytes)?
+        .checked_mul(8)
+        .ok_or(KeyError::KeyLengthOverflow)
 }
 
 #[cfg(feature = "interop-openssl")]
@@ -149,7 +170,7 @@ pub trait ToKeyMaterial<O> {
     type Format;
 
     fn to_material(&self, format: Self::Format) -> Result<KeyMaterial, KeyError>;
-    fn cryptographic_length(&self) -> i32;
+    fn cryptographic_length(&self) -> Result<i32, KeyError>;
 }
 
 impl<O, T> ToObject<O> for T
@@ -184,7 +205,7 @@ where
             key_format_type: format,
             key_compression_type: Self::KEY_COMPRESSION,
             cryptographic_algorithm: Some(alg),
-            cryptographic_length: Some(self.cryptographic_length()),
+            cryptographic_length: Some(self.cryptographic_length()?),
             key_wrapping_data: None,
             key_value: Some(KeyValue::Plain(PlainKeyValue {
                 attributes: vec![],
@@ -204,7 +225,7 @@ impl<O: Into<Object>, K: ToKeyMaterial<O>> ToKeyMaterial<O> for &K {
         (*self).to_material(format)
     }
 
-    fn cryptographic_length(&self) -> i32 {
+    fn cryptographic_length(&self) -> Result<i32, KeyError> {
         (*self).cryptographic_length()
     }
 }
@@ -365,6 +386,43 @@ mod tests {
                 key_material: material,
             })),
         }
+    }
+
+    #[test]
+    fn bytes_to_bit_length_happy_path() {
+        assert_eq!(bytes_to_bit_length(0_usize).unwrap(), 0);
+        assert_eq!(bytes_to_bit_length(32_usize).unwrap(), 256);
+        assert_eq!(bytes_to_bit_length(256_u32).unwrap(), 2048);
+    }
+
+    #[test]
+    fn bytes_to_bit_length_at_boundary() {
+        // i32::MAX / 8 == 268_435_455; * 8 == 2_147_483_640 == i32::MAX - 7.
+        let max_bytes = (i32::MAX / 8) as usize;
+        assert_eq!(
+            bytes_to_bit_length(max_bytes).unwrap(),
+            max_bytes as i32 * 8
+        );
+    }
+
+    #[test]
+    fn bytes_to_bit_length_rejects_mul_overflow() {
+        // Value fits in i32 but * 8 overflows — exercises the checked_mul branch.
+        let bytes = (i32::MAX / 8) as usize + 1;
+        assert!(matches!(
+            bytes_to_bit_length(bytes),
+            Err(KeyError::KeyLengthOverflow)
+        ));
+    }
+
+    #[test]
+    fn bytes_to_bit_length_rejects_narrowing_overflow() {
+        // Value exceeds i32::MAX — exercises the try_from branch.
+        let bytes = i32::MAX as usize + 1;
+        assert!(matches!(
+            bytes_to_bit_length(bytes),
+            Err(KeyError::KeyLengthOverflow)
+        ));
     }
 
     #[test]

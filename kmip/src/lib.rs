@@ -62,7 +62,7 @@ impl RequestMessage {
         }
     }
 
-    pub fn new_batched<I, P>(version: ProtocolVersion, payloads: I) -> Self
+    pub fn new_batched<I, P>(version: ProtocolVersion, payloads: I) -> Result<Self>
     where
         I: IntoIterator<Item = P>,
         P: Into<RequestPayload>,
@@ -73,10 +73,12 @@ impl RequestMessage {
             .map(|(id, pl)| RequestBatchItem::new(pl, Some(id.to_be_bytes().to_vec())))
             .collect::<Vec<_>>();
 
-        Self {
+        let batch_count =
+            i32::try_from(items.len()).map_err(|_| Error::BatchCountOverflow(items.len()))?;
+        Ok(Self {
             header: RequestHeader {
                 protocol_version: version,
-                batch_count: items.len() as i32,
+                batch_count,
                 asynchronous_indicator: None,
                 authentication: None,
                 maximum_response_size: None,
@@ -89,7 +91,7 @@ impl RequestMessage {
                 server_correlation_value: None,
             },
             batch_item: items,
-        }
+        })
     }
 }
 
