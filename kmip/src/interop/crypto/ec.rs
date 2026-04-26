@@ -60,8 +60,8 @@ where
         })
     }
 
-    fn cryptographic_length(&self) -> i32 {
-        C::CRYPTOGRAPHIC_LENGTH
+    fn cryptographic_length(&self) -> Result<i32, KeyError> {
+        Ok(C::CRYPTOGRAPHIC_LENGTH)
     }
 }
 
@@ -99,8 +99,8 @@ where
         })
     }
 
-    fn cryptographic_length(&self) -> i32 {
-        C::CRYPTOGRAPHIC_LENGTH
+    fn cryptographic_length(&self) -> Result<i32, KeyError> {
+        Ok(C::CRYPTOGRAPHIC_LENGTH)
     }
 }
 

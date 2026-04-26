@@ -284,7 +284,7 @@ impl Client {
         I: IntoIterator<Item = E>,
         E: Into<RequestPayload>,
     {
-        let mut msg = RequestMessage::new_batched(self.version()?, items);
+        let mut msg = RequestMessage::new_batched(self.version()?, items)?;
         msg.header.batch_error_continuation_option = cont;
 
         let resp = self.roundtrip(&msg)?;

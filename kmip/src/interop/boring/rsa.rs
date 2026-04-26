@@ -10,7 +10,9 @@ use crate::{
     TransparentRSAPrivateKey, TransparentRSAPublicKey,
 };
 
-use super::super::{FormatRsaPrivate, FormatRsaPublic, FromObject, KeyError, ToKeyMaterial};
+use super::super::{
+    FormatRsaPrivate, FormatRsaPublic, FromObject, KeyError, ToKeyMaterial, bytes_to_bit_length,
+};
 
 impl From<&Rsa<Private>> for TransparentRSAPrivateKey {
     fn from(value: &Rsa<Private>) -> Self {
@@ -119,8 +121,8 @@ impl ToKeyMaterial<PublicKey> for Rsa<Public> {
         })
     }
 
-    fn cryptographic_length(&self) -> i32 {
-        self.size() as i32 * 8
+    fn cryptographic_length(&self) -> Result<i32, KeyError> {
+        bytes_to_bit_length(self.size())
     }
 }
 
@@ -139,8 +141,8 @@ impl ToKeyMaterial<PrivateKey> for Rsa<Private> {
         })
     }
 
-    fn cryptographic_length(&self) -> i32 {
-        self.size() as i32 * 8
+    fn cryptographic_length(&self) -> Result<i32, KeyError> {
+        bytes_to_bit_length(self.size())
     }
 }
 

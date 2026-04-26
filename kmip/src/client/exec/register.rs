@@ -2,7 +2,7 @@ use crate::{
     Attribute, BatchClient, Certificate, CertificateType, Client, CryptographicAlgorithm,
     CryptographicUsageMask, FormatSymmetric, KeyBlock, KeyError, KeyFormatType, KeyMaterial,
     KeyValue, Object, PlainKeyValue, PrivateKey, PublicKey, RegisterRequestPayload, SecretData,
-    SecretDataType, SymmetricKey, ToObject, TransparentSymmetricKey,
+    SecretDataType, SymmetricKey, ToObject, TransparentSymmetricKey, interop::bytes_to_bit_length,
 };
 
 use super::{Attributed, Exec};
@@ -67,29 +67,31 @@ impl<'a> RegisterExecWantType<'a> {
         alg: CryptographicAlgorithm,
         format: FormatSymmetric,
         usage: CryptographicUsageMask,
-    ) -> RegisterExec<'a> {
+    ) -> Result<RegisterExec<'a>, KeyError> {
         let value = value.into();
-        self.object(SymmetricKey {
-            key_block: KeyBlock {
-                key_format_type: format.into(),
-                key_compression_type: None,
-                cryptographic_algorithm: Some(alg),
-                cryptographic_length: Some(value.len() as i32 * 8),
-                key_wrapping_data: None,
-                key_value: Some(KeyValue::Plain(PlainKeyValue {
-                    attributes: vec![],
-                    key_material: match format {
-                        FormatSymmetric::Raw => KeyMaterial::Bytes(value),
-                        FormatSymmetric::Transparent => {
-                            KeyMaterial::TransparentSymmetricKey(TransparentSymmetricKey {
-                                key: value,
-                            })
-                        }
-                    },
-                })),
-            },
-        })
-        .with_attribute(usage)
+        let cryptographic_length = bytes_to_bit_length(value.len())?;
+        Ok(self
+            .object(SymmetricKey {
+                key_block: KeyBlock {
+                    key_format_type: format.into(),
+                    key_compression_type: None,
+                    cryptographic_algorithm: Some(alg),
+                    cryptographic_length: Some(cryptographic_length),
+                    key_wrapping_data: None,
+                    key_value: Some(KeyValue::Plain(PlainKeyValue {
+                        attributes: vec![],
+                        key_material: match format {
+                            FormatSymmetric::Raw => KeyMaterial::Bytes(value),
+                            FormatSymmetric::Transparent => {
+                                KeyMaterial::TransparentSymmetricKey(TransparentSymmetricKey {
+                                    key: value,
+                                })
+                            }
+                        },
+                    })),
+                },
+            })
+            .with_attribute(usage))
     }
 
     pub fn public_key<K>(

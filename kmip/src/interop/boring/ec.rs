@@ -13,7 +13,9 @@ use crate::{
     PublicKey, RecommendedCurve, TransparentECPrivateKey, TransparentECPublicKey,
 };
 
-use super::super::{FormatEcPrivate, FormatEcPublic, FromObject, KeyError, ToKeyMaterial};
+use super::super::{
+    FormatEcPrivate, FormatEcPublic, FromObject, KeyError, ToKeyMaterial, bits_to_i32,
+};
 
 impl TryFrom<RecommendedCurve> for Nid {
     type Error = KeyError;
@@ -69,8 +71,8 @@ impl ToKeyMaterial<PublicKey> for EcKey<Public> {
         })
     }
 
-    fn cryptographic_length(&self) -> i32 {
-        self.group().order_bits() as i32
+    fn cryptographic_length(&self) -> Result<i32, KeyError> {
+        bits_to_i32(self.group().order_bits())
     }
 }
 
@@ -92,8 +94,8 @@ impl ToKeyMaterial<PrivateKey> for EcKey<Private> {
         })
     }
 
-    fn cryptographic_length(&self) -> i32 {
-        self.group().order_bits() as i32
+    fn cryptographic_length(&self) -> Result<i32, KeyError> {
+        bits_to_i32(self.group().order_bits())
     }
 }
 

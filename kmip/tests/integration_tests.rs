@@ -60,7 +60,8 @@ mod tests {
                     ]),
                 }),
             ],
-        );
+        )
+        .unwrap();
         msg.header.batch_error_continuation_option =
             Some(kmip::BatchErrorContinuationOption::Continue);
 
@@ -242,6 +243,7 @@ mod tests {
                 kmip::FormatSymmetric::Raw,
                 CryptographicUsageMask::Encrypt | CryptographicUsageMask::Decrypt,
             )
+            .unwrap()
             .exec()
             .unwrap();
     }
@@ -481,7 +483,8 @@ mod tests {
                     protocol_version: vec![],
                 }),
             ],
-        );
+        )
+        .unwrap();
         client.roundtrip(&msg).unwrap();
     }
 
