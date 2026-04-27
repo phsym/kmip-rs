@@ -6,6 +6,12 @@ use task_local_extensions::Extensions;
 
 use crate::{BitmaskUnit, Decoder, Error, Expected, RawTag, Result, Tag, Type};
 
+/// [`Decoder`] for the XML representation produced by [`XmlEncoder`](crate::XmlEncoder).
+///
+/// Reads from a `&[u8]` slice using `quick-xml` and yields tags as
+/// [`RawTag`]s — a tag is taken from the element's local name (with an
+/// `0xXXXXXX` prefix recognized as a numeric tag) and falls back to the
+/// `tag` attribute on `<TTLV>` elements.
 pub struct XmlDecoder<'a, E: BorrowMut<Extensions>> {
     reader: quick_xml::Reader<&'a [u8]>,
     evt: Option<Event<'a>>,
@@ -13,6 +19,8 @@ pub struct XmlDecoder<'a, E: BorrowMut<Extensions>> {
 }
 
 impl<'a> XmlDecoder<'a, Extensions> {
+    /// Creates a decoder reading XML from `buf`. Fails if the first event
+    /// cannot be read.
     pub fn new(buf: &'a [u8]) -> Result<Self> {
         let mut dec = Self {
             reader: quick_xml::Reader::from_reader(buf),

@@ -4,12 +4,16 @@ use task_local_extensions::Extensions;
 
 use crate::{Decoder, Error, Expected, Result, Tag, Type};
 
+/// [`Decoder`] for the canonical KMIP binary TTLV form.
+///
+/// Borrows its input as a `&[u8]` slice and walks it item by item.
 pub struct TtlvDecoder<'a, E: BorrowMut<Extensions>> {
     buf: &'a [u8],
     ext: E,
 }
 
 impl<'a> TtlvDecoder<'a, Extensions> {
+    /// Creates a decoder positioned at the start of `buf`.
     pub fn new(buf: &'a [u8]) -> Self {
         Self {
             buf,
@@ -29,6 +33,9 @@ impl<E: BorrowMut<Extensions>> TtlvDecoder<'_, E> {
         Ok(())
     }
 
+    /// Returns the body length of the current item, including trailing
+    /// padding to the 8-byte item alignment. Used by [`Stream`](crate::Stream)
+    /// to size the next read after the 8-byte header.
     pub fn padded_len(&self) -> Result<usize> {
         let l = self.len()?;
         Ok(l + crate::pad_for_len(l))

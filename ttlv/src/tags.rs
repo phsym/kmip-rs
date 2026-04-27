@@ -32,6 +32,17 @@ where
     }
 }
 
+/// Owned tag identifier.
+///
+/// A tag may be:
+/// - `Num` — a numeric tag (KMIP encodes tags on 3 bytes; the high byte is
+///   zero).
+/// - `Str` — a name-only tag, used by the XML codec when no numeric form is
+///   known.
+/// - `NumStr` — both a numeric tag and its name, kept together so the same
+///   value can round-trip through any encoder.
+///
+/// See [`RawTagRef`] for a borrowing counterpart.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize), serde(untagged))]
@@ -41,6 +52,7 @@ pub enum RawTag {
     NumStr(u32, String),
 }
 
+/// Borrowing counterpart of [`RawTag`].
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RawTagRef<'a> {
@@ -56,6 +68,8 @@ pub enum RawTagRef<'a> {
 // }
 
 impl RawTagRef<'_> {
+    /// Returns an owned [`RawTag`] holding the same numeric and/or string
+    /// identification.
     pub fn to_owned(&self) -> RawTag {
         match self {
             Self::Num(n) => RawTag::Num(*n),
@@ -66,6 +80,7 @@ impl RawTagRef<'_> {
 }
 
 impl RawTag {
+    /// Borrows this tag as a [`RawTagRef`].
     pub fn get_ref(&self) -> RawTagRef<'_> {
         match self {
             Self::Num(n) => RawTagRef::Num(*n),
@@ -107,17 +122,38 @@ impl fmt::Display for RawTag {
     }
 }
 
+/// Anything that identifies a TTLV tag.
+///
+/// At least one of [`numeric`](Self::numeric) or [`name`](Self::name) must
+/// return `Some`. The binary [`Encoder`](crate::Encoder) requires a numeric
+/// form; the XML and text encoders prefer a name and fall back to the numeric
+/// form rendered as `0xXXXXXX`.
+///
+/// Common implementations are provided for `u32` (numeric only), `&str` (name
+/// only), and `(u32, &str)` (both), as well as for derived tag types.
 pub trait Tag {
+    /// Returns the numeric form of the tag, if known.
     fn numeric(&self) -> Option<u32>;
+    /// Returns the textual name of the tag, if known.
     fn name(&self) -> Option<&str>;
+    /// Borrows the tag as a [`RawTagRef`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if both [`numeric`](Self::numeric) and [`name`](Self::name)
+    /// return `None` — at least one form must be available.
     fn raw(&self) -> RawTagRef<'_> {
         match (self.numeric(), self.name()) {
             (Some(n), Some(s)) => RawTagRef::NumStr(n, s),
             (Some(n), None) => RawTagRef::Num(n),
             (None, Some(s)) => RawTagRef::Str(s),
-            (None, None) => panic!(),
+            (None, None) => panic!("Tag::raw called on a tag with neither a numeric nor a name form"),
         }
     }
+    /// Returns whether two tags identify the same item.
+    ///
+    /// Tags match by numeric value when both have one; otherwise by name.
+    /// Tags lacking a comparable form on both sides do not match.
     fn matches(&self, other: &impl Tag) -> bool {
         match (self.numeric(), other.numeric()) {
             (Some(a), Some(b)) => a == b,
@@ -127,6 +163,9 @@ pub trait Tag {
             },
         }
     }
+    /// Returns the numeric form of the tag or [`Error::TagMissingNumeric`]
+    /// when only a name is available. Used by encoders that need a numeric
+    /// tag for the wire format.
     fn numeric_or_err(&self) -> crate::Result<u32> {
         self.numeric().ok_or_else(|| Error::TagMissingNumeric {
             tag: self.raw().to_owned(),
@@ -239,6 +278,11 @@ impl Tag for (u32, Option<&str>) {
 //         todo!()
 //     }
 // }
+/// Tag that may or may not match a known variant of `T`.
+///
+/// Useful when decoding values whose tag set is open-ended: a known tag is
+/// kept in its strongly-typed form, while unknown tags are preserved as a
+/// [`RawTag`] so they can still be re-encoded faithfully.
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize), serde(untagged))]
 #[derive(Debug, Clone, PartialEq)]

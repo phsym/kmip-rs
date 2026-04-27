@@ -3,12 +3,21 @@ use crate::{Decodable, Decoder, Encodable, Encoder, Error, Result, TtlvDecoder, 
 /// Default maximum message size: 16 MiB.
 const DEFAULT_MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
+/// Length-prefixed framing adapter for TTLV over a synchronous I/O channel.
+///
+/// Wraps any `Read` and/or `Write` and exchanges full TTLV messages: a
+/// message's length is read from its outer `Structure` header so each call
+/// returns one complete value. Incoming messages whose declared length
+/// exceeds the configured maximum (set via
+/// [`with_max_message_size`](Self::with_max_message_size); 16 MiB by default)
+/// are rejected before any body bytes are read.
 pub struct Stream<IO> {
     io: IO,
     max_message_size: usize,
 }
 
 impl<IO> Stream<IO> {
+    /// Wraps `stream` with default framing limits.
     pub fn new(stream: IO) -> Self {
         Self {
             io: stream,
@@ -16,6 +25,9 @@ impl<IO> Stream<IO> {
         }
     }
 
+    /// Sets the maximum size, in bytes, of a single incoming TTLV message.
+    /// Messages exceeding `max` are rejected with an [`Error::Io`] whose
+    /// kind is [`std::io::ErrorKind::InvalidData`].
     pub fn with_max_message_size(mut self, max: usize) -> Self {
         self.max_message_size = max;
         self
@@ -23,12 +35,14 @@ impl<IO> Stream<IO> {
 }
 
 impl<IO> Stream<IO> {
+    /// Drops the framing layer and returns the wrapped I/O object.
     pub fn into_inner(self) -> IO {
         self.io
     }
 }
 
 impl<IO: std::io::Write + std::io::Read> Stream<IO> {
+    /// Sends `msg` and waits for one full response.
     pub fn roundtrip<D: Decodable>(&mut self, msg: &impl Encodable) -> Result<D> {
         self.send(msg)?;
         self.receive()
@@ -36,6 +50,7 @@ impl<IO: std::io::Write + std::io::Read> Stream<IO> {
 }
 
 impl<IO: std::io::Write> Stream<IO> {
+    /// Encodes `msg` and writes it to the underlying stream, then flushes.
     pub fn send(&mut self, msg: &impl Encodable) -> Result<()> {
         let mut encoder = TtlvEncoder::new();
         encoder.encode(msg)?;
@@ -46,6 +61,12 @@ impl<IO: std::io::Write> Stream<IO> {
 }
 
 impl<IO: std::io::Read> Stream<IO> {
+    /// Reads bytes until a full TTLV message can be decoded into `D`, then
+    /// returns it. Returns [`Error::EOF`] if the peer closed after some bytes
+    /// of a message were read but before the message was complete (truncation),
+    /// and [`Error::Io`] with [`std::io::ErrorKind::UnexpectedEof`] if the peer
+    /// closed before any bytes were read on this call. Other [`Error`]s
+    /// indicate framing or decoding failure.
     pub fn receive<D: Decodable>(&mut self) -> Result<D> {
         let mut read = 0;
         let mut buf = vec![0; 512];

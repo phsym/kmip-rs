@@ -6,6 +6,10 @@ use crate::{
     Decodable, Decoder, Encodable, Encoder, Error, RawTag, Tag, TagDecodable, TagEncodable,
 };
 
+/// The TTLV item type tag (the "T" in *Type*).
+///
+/// Encoded on a single byte in the binary format, with values matching those
+/// defined in the KMIP TTLV specification.
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Display, FromRepr, IntoStaticStr, AsRefStr, EnumString,
@@ -37,6 +41,7 @@ impl TryFrom<u8> for Type {
     }
 }
 
+/// A TTLV `Structure` value: an ordered list of nested [`TTLV`] items.
 #[derive(Clone, PartialEq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -63,6 +68,11 @@ impl<T: Tag> fmt::Debug for Struct<T> {
     }
 }
 
+/// A dynamically-typed TTLV value (the "V" in *Value*).
+///
+/// Each variant corresponds to a [`Type`]. `Value` is what you get from a
+/// fully generic decode; strongly-typed Rust definitions usually go through
+/// the `#[derive(Encodable, Decodable)]` macros instead.
 #[derive(Clone, PartialEq, Hash, EnumIs, EnumTryAs)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(
@@ -86,6 +96,7 @@ pub enum Value<T: Tag = RawTag> {
 }
 
 impl<T: Tag> Value<T> {
+    /// Returns the [`Type`] discriminant of this value.
     pub fn get_type(&self) -> Type {
         match self {
             Self::Structure(..) => Type::Structure,
@@ -156,6 +167,11 @@ impl<T: Tag> fmt::Debug for Value<T> {
     }
 }
 
+/// A single dynamically-typed TTLV item: a tag paired with a [`Value`].
+///
+/// `TTLV` round-trips losslessly through any [`Encoder`]/[`Decoder`] pair and
+/// is the natural target when inspecting unknown messages or building tools
+/// that operate on the wire format directly.
 #[derive(Clone, PartialEq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -165,6 +181,7 @@ pub struct TTLV<T: Tag = RawTag> {
 }
 
 impl<T: Tag> TTLV<T> {
+    /// Returns the [`Type`] of the wrapped value.
     pub fn get_type(&self) -> Type {
         self.val.get_type()
     }

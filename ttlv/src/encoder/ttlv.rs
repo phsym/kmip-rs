@@ -4,6 +4,12 @@ use task_local_extensions::Extensions;
 
 use crate::{Bitmask, Encoder, Tag, Type};
 
+/// [`Encoder`] producing the canonical KMIP binary TTLV form.
+///
+/// Each item is emitted as `tag (3 bytes) | type (1 byte) | length (4 bytes,
+/// big-endian) | value`, with the value zero-padded to a multiple of 8 bytes.
+/// Output is collected into an internal `Vec<u8>`; access it with
+/// [`bytes`](Self::bytes) or take ownership with [`into_inner`](Self::into_inner).
 #[derive(Default)]
 pub struct TtlvEncoder {
     buf: Vec<u8>,
@@ -11,20 +17,25 @@ pub struct TtlvEncoder {
 }
 
 impl TtlvEncoder {
+    /// Creates an empty encoder.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Resets the encoder, dropping any accumulated bytes and extensions so
+    /// the same instance can be reused for the next message.
     pub fn clear(&mut self) {
         self.ext.clear();
         //TODO: zeroize buff
         self.buf.clear();
     }
 
+    /// Returns the bytes encoded so far.
     pub fn bytes(&self) -> &[u8] {
         &self.buf
     }
 
+    /// Consumes the encoder and returns the encoded bytes.
     pub fn into_inner(self) -> Vec<u8> {
         self.buf
     }

@@ -6,6 +6,12 @@ use super::{Encodable, Encoder};
 use chrono::Duration;
 use task_local_extensions::Extensions;
 
+/// [`Encoder`] producing a human-readable, indented text rendering of TTLV.
+///
+/// Designed for logging and debugging rather than interchange. Each item is
+/// rendered as `<tag> (<type>): <value>`, with structures expanded across
+/// indented lines. Use [`without_type`](Self::without_type) to omit the type
+/// annotation when it would be noise.
 #[derive(Default)]
 pub struct TextEncoder {
     buf: Vec<u8>,
@@ -15,29 +21,36 @@ pub struct TextEncoder {
 }
 
 impl TextEncoder {
+    /// Convenience: encodes `v` into an owned text string.
     pub fn encode_to_string(v: &impl Encodable) -> crate::Result<String> {
         let mut enc = Self::new();
         enc.encode(v)?;
         Ok(enc.into_string())
     }
 
+    /// Creates an empty encoder.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Suppresses the `(<type>)` annotation next to each tag when `b` is
+    /// `true`; emits it when `b` is `false` (the default).
     pub fn without_type(mut self, b: bool) -> Self {
         self.no_type = b;
         self
     }
 
+    /// Returns the bytes encoded so far.
     pub fn bytes(&self) -> &[u8] {
         &self.buf
     }
 
+    /// Consumes the encoder and returns the encoded bytes.
     pub fn into_inner(self) -> Vec<u8> {
         self.buf
     }
 
+    /// Consumes the encoder and returns the encoded text as a `String`.
     pub fn into_string(self) -> String {
         // Unwrapping here as the buffer is internal and must
         // always hold valid UTF8 encoded data.

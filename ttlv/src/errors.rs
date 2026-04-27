@@ -11,8 +11,14 @@ use thiserror::Error;
 
 use crate::{RawTag, Type};
 
+/// Result alias for fallible TTLV operations.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// What an [`Error::UnexpectedTag`] or [`Error::UnexpectedType`] was hoping
+/// to find.
+///
+/// `Only(t)` means a single value was expected; `OneOf(vs)` means any of a
+/// set was acceptable.
 #[derive(Debug)]
 pub enum Expected<T> {
     Only(T),
@@ -37,6 +43,12 @@ impl<T: fmt::Display> fmt::Display for Expected<T> {
     }
 }
 
+/// All errors that can occur while encoding, decoding, or framing TTLV.
+///
+/// `EOF` and `UnexpectedTag` are special: the [`Decodable`](crate::Decodable)
+/// blanket impls for `Option<T>` and `Vec<T>` interpret them as "no further
+/// item of this kind", which lets repeated and optional fields be parsed
+/// without lookahead.
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("EOF")]

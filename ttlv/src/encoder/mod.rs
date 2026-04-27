@@ -15,20 +15,31 @@ use std::{ops::Deref, time};
 
 use crate::{Bitmask, Tag};
 
+/// A type that knows its own TTLV tag and can encode itself.
+///
+/// Typically derived with `#[derive(Encodable)]` and a `#[ttlv(tag = ...)]`
+/// attribute. The dual of [`Decodable`](crate::Decodable).
 #[diagnostic::on_unimplemented(
     message = "The trait `Encodable` is not implemented for `{Self}`",
     note = "You can automatically derive it with `#[derive(ttlv::Encodable)]` and the `#[ttlv(tag = <tag>)]` attribute",
     note = "Or add the attribute `#[ttlv(tag = <tag>)]` on a derived type's field"
 )]
 pub trait Encodable {
+    /// Writes this value to `encoder`.
     fn encode(&self, encoder: &mut impl Encoder) -> crate::Result<()>;
 }
 
+/// A type that can encode itself once a tag is provided externally.
+///
+/// The dual of [`TagDecodable`](crate::TagDecodable). Blanket impls on
+/// `Option<T>` and `Vec<T>` make absent fields elide and repeated fields
+/// expand into successive items.
 #[diagnostic::on_unimplemented(
     message = "The trait `TagEncodable` is not implemented for `{Self}`",
     note = "You can automatically derive it with `#[derive(ttlv::Encodable)]`"
 )]
 pub trait TagEncodable {
+    /// Writes this value to `encoder` under `tag`.
     fn encode<E: Encoder>(&self, tag: impl Tag, encoder: &mut E) -> crate::Result<()>;
 }
 
@@ -104,29 +115,48 @@ pub(crate) fn bigint_hex(num: &[u8]) -> String {
     hex
 }
 
+/// Push-style writer for TTLV values.
+///
+/// Each `write_*` method emits one item of a specific [`Type`](crate::Type). Implementors
+/// include [`TtlvEncoder`](crate::TtlvEncoder) for the binary form,
+/// [`XmlEncoder`](crate::XmlEncoder) for the XML form, and
+/// [`TextEncoder`](crate::TextEncoder) for the human-readable form.
 pub trait Encoder {
+    /// Encoder type used inside [`write_struct`](Self::write_struct).
     type StructEncoder<'b>: Encoder;
+    /// Returns the contextual extension map carried alongside the encode.
     fn extensions(&mut self) -> &mut Extensions;
+    /// Writes a `Structure` item, calling `f` to emit its body.
     fn write_struct(
         &mut self,
         tag: impl Tag,
         f: impl FnOnce(&mut Self::StructEncoder<'_>) -> crate::Result<()>,
     ) -> crate::Result<()>;
+    /// Writes an `Integer` item.
     fn write_integer(&mut self, tag: impl Tag, value: i32) -> crate::Result<()>;
+    /// Writes a `LongInteger` item.
     fn write_long(&mut self, tag: impl Tag, value: i64) -> crate::Result<()>;
     /// Encodes a BigInteger from a big-endian, two's-complement byte slice.
     ///
     /// An empty `num` is normalized to a single zero byte; the wire form is
     /// never empty.
     fn write_bigint(&mut self, _tag: impl Tag, num: impl AsRef<[u8]>) -> crate::Result<()>;
+    /// Writes an `Enumeration` item. `value` is the tag identifying the variant.
     fn write_enum(&mut self, tag: impl Tag, value: impl Tag) -> crate::Result<()>;
+    /// Writes a `Boolean` item.
     fn write_bool(&mut self, tag: impl Tag, value: bool) -> crate::Result<()>;
+    /// Writes a `TextString` item.
     fn write_string(&mut self, tag: impl Tag, s: impl AsRef<str>) -> crate::Result<()>;
+    /// Writes a `ByteString` item.
     fn write_bytes(&mut self, tag: impl Tag, s: impl AsRef<[u8]>) -> crate::Result<()>;
+    /// Writes a `DateTime` item from a Unix timestamp in seconds.
     fn write_datetime(&mut self, tag: impl Tag, date: i64) -> crate::Result<()>;
+    /// Writes an `Interval` item from a duration in seconds.
     fn write_interval(&mut self, tag: impl Tag, seconds: u32) -> crate::Result<()>;
+    /// Writes a [`Bitmask`] as an `Integer` item.
     fn write_bitmask(&mut self, tag: impl Tag, value: impl Bitmask) -> crate::Result<()>;
 
+    /// Encodes an [`Encodable`] value. Equivalent to `value.encode(self)`.
     fn encode(&mut self, value: &impl Encodable) -> crate::Result<()>
     where
         Self: Sized,
@@ -134,6 +164,8 @@ pub trait Encoder {
         value.encode(self)
     }
 
+    /// Encodes a [`TagEncodable`] value at `tag`. Equivalent to
+    /// `value.encode(tag, self)`.
     fn tag_encode(&mut self, tag: impl Tag, value: &impl TagEncodable) -> crate::Result<()>
     where
         Self: Sized,

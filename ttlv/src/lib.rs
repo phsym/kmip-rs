@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 mod decoder;
 mod encoder;
 mod errors;
@@ -30,6 +32,10 @@ pub(crate) const fn pad_for_len(len: usize) -> usize {
     (ITEM_ALIGN - len % ITEM_ALIGN) % ITEM_ALIGN
 }
 
+/// Arbitrary-precision integer in KMIP TTLV form.
+///
+/// The wire representation is a big-endian, two's-complement byte string. This
+/// type stores the integer's bytes and guarantees they are never empty.
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(
@@ -52,11 +58,19 @@ impl BigInteger {
         bytes
     }
 
+    /// Builds a `BigInteger` from a big-endian, two's-complement byte slice.
+    ///
+    /// The high bit of `bytes[0]` is interpreted as the sign bit. An empty
+    /// input is normalized to a single zero byte.
     pub fn signed(bytes: Vec<u8>) -> Self {
         let bytes = Self::ensure_not_empty(bytes);
         Self(bytes)
     }
 
+    /// Builds a `BigInteger` from a big-endian unsigned magnitude.
+    ///
+    /// A leading `0x00` byte is prepended when the high bit is set, so that
+    /// the value is never reinterpreted as negative under two's-complement.
     pub fn unsigned(bytes: Vec<u8>) -> Self {
         let mut bytes = Self::ensure_not_empty(bytes);
         if (bytes[0] >> 7) & 0x01 == 1 {
@@ -65,6 +79,7 @@ impl BigInteger {
         Self(bytes)
     }
 
+    /// Consumes the `BigInteger` and returns the underlying bytes.
     pub fn into_vec(self) -> Vec<u8> {
         self.0
     }
@@ -84,10 +99,16 @@ impl DerefMut for BigInteger {
     }
 }
 
+/// Convenience methods on the [`Extensions`] map carried by encoders and
+/// decoders. Extensions let callers thread context (for example the
+/// negotiated protocol version) through encode/decode without changing
+/// trait signatures.
 pub trait ExtensionsExt {
     // fn get_or_default<'a, T: 'static>(&'a self) -> &'a T
     // where
     //     &'a T: Default;
+    /// Returns whether an extension of type `T` is present and falls within
+    /// the given range. Returns `false` if no value of type `T` has been set.
     fn is_in<T: PartialOrd<T> + 'static, R: RangeBounds<T>>(&self, r: R) -> bool;
 }
 
@@ -106,6 +127,10 @@ impl ExtensionsExt for Extensions {
     }
 }
 
+/// One bit (or named flag) in a [`Bitmask`] value.
+///
+/// `Named` is used by encoders that have access to flag names (for example
+/// XML and text); `Unnamed` carries a raw bit pattern when no name is known.
 pub enum BitmaskUnit<'a> {
     Named(Cow<'a, str>),
     Unnamed(u32),
@@ -120,12 +145,24 @@ impl fmt::Display for BitmaskUnit<'_> {
     }
 }
 
+/// A flag set encodable as a TTLV `Integer`.
+///
+/// The blanket impl on `i32` accepts unnamed bits only. The `bitflags` impl
+/// (feature `bitflags`) accepts both named flags and arbitrary bits, allowing
+/// round-trips through the XML and text codecs which use flag names.
 pub trait Bitmask: Sized {
+    /// Returns an empty bitmask.
     fn empty() -> Self;
+    /// Iterates over the set bits, yielding their names where available.
     fn units(&self) -> impl Iterator<Item = BitmaskUnit<'_>>;
+    /// Inserts a flag, identified by name or by raw bit value.
+    ///
+    /// Returns [`Error::InvalidBitmaskValue`] if `unit` is unrecognized.
     fn insert_unit(&mut self, unit: BitmaskUnit) -> Result<()>;
+    /// Returns the bitmask as a signed 32-bit integer (the wire form).
     fn value(&self) -> i32;
 
+    /// Builds a bitmask from an iterator of [`BitmaskUnit`]s.
     fn from_units<'a>(units: impl Iterator<Item = BitmaskUnit<'a>>) -> Result<Self> {
         let mut v = Self::empty();
         for u in units {
@@ -134,6 +171,8 @@ pub trait Bitmask: Sized {
         Ok(v)
     }
 
+    /// Joins the set flags into a string with `sep` between units. Used by
+    /// the text encoder to render expressions like `"Encrypt | Decrypt"`.
     fn format(&self, sep: &str) -> String {
         self.units()
             .map(|u| u.to_string())
@@ -194,6 +233,9 @@ impl Bitmask for i32 {
     }
 }
 
+/// Marker trait that opts a `bitflags`-generated type into [`Bitmask`].
+///
+/// Implemented for you by the [`bitmask!`] macro.
 #[cfg(feature = "bitflags")]
 pub trait BitflagMarker: bitflags::Flags<Bits = u32> + Copy {}
 
@@ -231,6 +273,23 @@ impl<T: BitflagMarker> Bitmask for T {
     }
 }
 
+/// Declares a `bitflags` flag set wired up for TTLV encoding.
+///
+/// Mirrors [`bitflags::bitflags!`] syntax and additionally implements
+/// [`Bitmask`], [`TagEncodable`], [`TagDecodable`], and `Display` (using the
+/// `bitflags` parser format). The underlying storage must be `u32`.
+///
+/// # Example
+///
+/// ```
+/// ttlv::bitmask! {
+///     #[derive(Clone, Copy, PartialEq, Debug)]
+///     pub struct UsageMask: u32 {
+///         const Encrypt = 0x0000_0004;
+///         const Decrypt = 0x0000_0008;
+///     }
+/// }
+/// ```
 #[cfg(feature = "bitflags")]
 #[macro_export]
 macro_rules! bitmask {

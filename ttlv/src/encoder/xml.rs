@@ -5,6 +5,14 @@ use task_local_extensions::Extensions;
 
 use crate::{Bitmask, Encodable, Encoder, Error, Tag, Type};
 
+/// [`Encoder`] producing the XML representation defined in *KMIP Additional
+/// Message Encodings*.
+///
+/// Each item is emitted as an XML element whose name is the tag's textual
+/// name (or `<TTLV tag="0x...">` when only a numeric form is known).
+/// Primitive items are empty elements with `type` and `value` attributes
+/// carrying the item's [`Type`] and content; structures wrap their children
+/// and carry neither attribute.
 pub struct XmlEncoder<T: BorrowMut<quick_xml::Writer<Vec<u8>>>, E: BorrowMut<Extensions>>(T, E);
 
 impl Default for XmlEncoder<quick_xml::Writer<Vec<u8>>, Extensions> {
@@ -14,12 +22,15 @@ impl Default for XmlEncoder<quick_xml::Writer<Vec<u8>>, Extensions> {
 }
 
 impl XmlEncoder<quick_xml::Writer<Vec<u8>>, Extensions> {
+    /// Convenience: encodes `v` into an owned XML string.
     pub fn encode_to_string(v: &impl Encodable) -> crate::Result<String> {
         let mut enc = Self::new();
         enc.encode(v)?;
         Ok(enc.into_string())
     }
 
+    /// Creates an empty encoder writing into an internal `Vec<u8>` with
+    /// 4-space indentation.
     pub fn new() -> Self {
         Self(
             quick_xml::Writer::new_with_indent(Vec::new(), b' ', 4),
@@ -27,10 +38,12 @@ impl XmlEncoder<quick_xml::Writer<Vec<u8>>, Extensions> {
         )
     }
 
+    /// Consumes the encoder and returns the encoded bytes.
     pub fn into_inner(self) -> Vec<u8> {
         self.0.into_inner()
     }
 
+    /// Consumes the encoder and returns the encoded XML as a `String`.
     pub fn into_string(self) -> String {
         // Unwrapping here as the buffer is internal and must
         // always hold valid UTF8 encoded data.
@@ -39,10 +52,12 @@ impl XmlEncoder<quick_xml::Writer<Vec<u8>>, Extensions> {
 }
 
 impl<T: BorrowMut<quick_xml::Writer<Vec<u8>>>, E: BorrowMut<Extensions>> XmlEncoder<T, E> {
+    /// Returns the bytes encoded so far.
     pub fn bytes(&self) -> &[u8] {
         self.0.borrow().get_ref()
     }
 
+    /// Returns the encoded output as a `&str`.
     pub fn as_str(&self) -> &str {
         // Unwrapping here as the buffer is internal and must
         // always hold valid UTF8 encoded data.
