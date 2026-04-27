@@ -1,3 +1,5 @@
+#![doc = include_str!("../../README.md")]
+
 mod attributes;
 mod bitmasks;
 pub mod client;
