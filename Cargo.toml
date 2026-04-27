@@ -1,11 +1,7 @@
 [workspace]
-default-members = ["kmip"]
+default-members = ["kmip", "ttlv", "ttlv-derive"]
 resolver = "3"
-members = [
-    "kmip",
-    "ttlv",
-    "ttlv-derive",
-]
+members = ["kmip", "ttlv", "ttlv-derive"]
 
 [workspace.package]
 publish = false
