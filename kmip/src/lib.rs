@@ -1,6 +1,6 @@
 #![doc = include_str!("../../README.md")]
 
-mod attributes;
+pub mod attributes;
 mod bitmasks;
 pub mod client;
 pub mod enums;
@@ -12,19 +12,20 @@ pub mod server;
 mod tags;
 pub mod types;
 
-pub use attributes::*;
 pub use bitmasks::*;
-pub use client::*;
-pub use enums::*;
 pub use errors::*;
-pub use interop::*;
-pub use objects::*;
-pub use payloads::*;
 pub use tags::*;
-pub use types::*;
 
 use chrono::Local;
 use ttlv::{Decodable, Decoder, Encodable, Encoder};
+
+use crate::{
+    enums::{
+        AttestationType, BatchErrorContinuationOption, Operations, ResultReason, ResultStatus,
+    },
+    payloads::{RequestPayload, ResponsePayload},
+    types::{Authentication, MessageExtension, Nonce, ProtocolVersion},
+};
 
 pub trait TryAsRef<T> {
     fn try_as_ref(&self) -> Option<&T>;

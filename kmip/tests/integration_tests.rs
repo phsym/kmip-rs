@@ -8,13 +8,20 @@ mod tests {
 
     use chrono::Duration;
     use kmip::{
-        Attribute, AttributeName, BatchErrorContinuationOption, BatchResultExt, BlockCipherMode,
-        CertificateType, CreateRequestPayload, CryptographicAlgorithm, CryptographicLength,
-        CryptographicParameters, CryptographicUsageMask, DecryptRequestPayload,
-        EncryptRequestPayload, FormatEcPrivate, FormatEcPublic, FormatRsaPrivate, FormatRsaPublic,
-        LinkType, LocateRequestPayload, NameType, ObjectType, ProtocolVersion, QueryRequestPayload,
-        RecommendedCurve, RequestMessage, RequestPayload, ResultReason, ResultStatus,
-        SecretDataType, State, Tags, TemplateAttribute,
+        CryptographicUsageMask, RequestMessage, Tags,
+        attributes::{Attribute, AttributeName, CryptographicLength},
+        client::BatchResultExt,
+        enums::{
+            BatchErrorContinuationOption, BlockCipherMode, CertificateType, CryptographicAlgorithm,
+            LinkType, NameType, ObjectType, RecommendedCurve, ResultReason, ResultStatus,
+            SecretDataType, State,
+        },
+        interop::{FormatEcPrivate, FormatEcPublic, FormatRsaPrivate, FormatRsaPublic},
+        payloads::{
+            CreateRequestPayload, DecryptRequestPayload, EncryptRequestPayload,
+            LocateRequestPayload, QueryRequestPayload, RequestPayload,
+        },
+        types::{CryptographicParameters, Name, ProtocolVersion, TemplateAttribute},
     };
     use ttlv::{MaybeKnownTag, Struct, TTLV, Value};
 
@@ -27,7 +34,7 @@ mod tests {
                 RequestPayload::new(CreateRequestPayload {
                     object_type: ObjectType::SymmetricKey,
                     attributes: TemplateAttribute::new(vec![
-                        Attribute::new(kmip::Name {
+                        Attribute::new(Name {
                             name_value: "K-1".into(),
                             name_type: NameType::UninterpretedTextString,
                         }),
@@ -40,7 +47,7 @@ mod tests {
                 }),
                 RequestPayload::new(CreateRequestPayload {
                     object_type: ObjectType::SymmetricKey,
-                    attributes: TemplateAttribute::new(vec![Attribute::new(kmip::Name {
+                    attributes: TemplateAttribute::new(vec![Attribute::new(Name {
                         name_value: "K-2".into(),
                         name_type: NameType::UninterpretedTextString,
                     })]),
@@ -48,7 +55,7 @@ mod tests {
                 RequestPayload::new(CreateRequestPayload {
                     object_type: ObjectType::SymmetricKey,
                     attributes: TemplateAttribute::new(vec![
-                        Attribute::new(kmip::Name {
+                        Attribute::new(Name {
                             name_value: "K-3".into(),
                             name_type: NameType::UninterpretedTextString,
                         }),
@@ -63,7 +70,7 @@ mod tests {
         )
         .unwrap();
         msg.header.batch_error_continuation_option =
-            Some(kmip::BatchErrorContinuationOption::Continue);
+            Some(kmip::enums::BatchErrorContinuationOption::Continue);
 
         client.roundtrip(&msg).unwrap();
     }
@@ -240,7 +247,7 @@ mod tests {
             .symmetric_key(
                 key,
                 CryptographicAlgorithm::AES,
-                kmip::FormatSymmetric::Raw,
+                kmip::interop::FormatSymmetric::Raw,
                 CryptographicUsageMask::Encrypt | CryptographicUsageMask::Decrypt,
             )
             .unwrap()
@@ -467,19 +474,19 @@ mod tests {
         let msg = RequestMessage::new_batched(
             ProtocolVersion::V1_1,
             vec![
-                RequestPayload::new(kmip::DiscoverVersionsRequestPayload {
+                RequestPayload::new(kmip::payloads::DiscoverVersionsRequestPayload {
                     protocol_version: vec![
-                        kmip::ProtocolVersion {
+                        kmip::types::ProtocolVersion {
                             protocol_version_major: 1,
                             protocol_version_minor: 4,
                         },
-                        kmip::ProtocolVersion {
+                        kmip::types::ProtocolVersion {
                             protocol_version_major: 1,
                             protocol_version_minor: 0,
                         },
                     ],
                 }),
-                RequestPayload::new(kmip::DiscoverVersionsRequestPayload {
+                RequestPayload::new(kmip::payloads::DiscoverVersionsRequestPayload {
                     protocol_version: vec![],
                 }),
             ],

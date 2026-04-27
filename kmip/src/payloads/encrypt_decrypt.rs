@@ -1,6 +1,9 @@
 use ttlv::{Decodable, Encodable};
 
-use crate::{CryptographicParameters, ProtocolVersion, Tags};
+use crate::{
+    Tags,
+    types::{CryptographicParameters, ProtocolVersion},
+};
 
 /// This operation requests the server to perform an encryption operation on the provided data using a
 /// Managed Cryptographic Object as the key for the encryption operation.

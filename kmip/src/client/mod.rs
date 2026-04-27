@@ -1,7 +1,11 @@
 use crate::{
-    BatchErrorContinuationOption, DiscoverVersionsRequestPayload, DiscoverVersionsResponsePayload,
-    Error, ProtocolError, ProtocolVersion, Request, RequestMessage, RequestPayload,
-    ResponseBatchItem, ResponseMessage, ResponsePayload, Result, ResultReason,
+    Error, ProtocolError, RequestMessage, ResponseBatchItem, ResponseMessage, Result,
+    enums::{BatchErrorContinuationOption, ResultReason},
+    payloads::{
+        DiscoverVersionsRequestPayload, DiscoverVersionsResponsePayload, Request, RequestPayload,
+        ResponsePayload,
+    },
+    types::ProtocolVersion,
 };
 use std::{
     fs,
@@ -493,7 +497,7 @@ mod tests {
                 operation: None,
                 response_payload: None,
                 unique_batch_item_id: None,
-                result_status: crate::ResultStatus::Success,
+                result_status: crate::enums::ResultStatus::Success,
                 result_reason: None,
                 result_message: None,
                 asynchronous_correlation_value: None,

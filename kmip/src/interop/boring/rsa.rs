@@ -6,8 +6,11 @@ use boring::{
 use ttlv::BigInteger;
 
 use crate::{
-    CryptographicAlgorithm, KeyFormatType, KeyMaterial, Object, PrivateKey, PublicKey,
-    TransparentRSAPrivateKey, TransparentRSAPublicKey,
+    enums::{CryptographicAlgorithm, KeyFormatType},
+    objects::{
+        KeyMaterial, Object, PrivateKey, PublicKey, TransparentRSAPrivateKey,
+        TransparentRSAPublicKey,
+    },
 };
 
 use super::super::{

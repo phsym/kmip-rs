@@ -1,8 +1,12 @@
 use std::marker::PhantomData;
 
 use crate::{
-    Attribute, BatchClient, Link, LinkType, Name, ObjectType, Request, Result, UniqueIdentifier,
-    UsageLimits, UsageLimitsUnit,
+    Result,
+    attributes::{Attribute, UniqueIdentifier},
+    client::BatchClient,
+    enums::{LinkType, ObjectType, UsageLimitsUnit},
+    payloads::Request,
+    types::{Link, Name, UsageLimits},
 };
 
 use super::{BatchExec, Client};
@@ -27,28 +31,28 @@ mod sign_verify;
 
 macro_rules! impl_unique_identifier_op {
     ($method:ident, $payload:ident) => {
-        impl $crate::Client {
+        impl $crate::client::Client {
             pub fn $method(
                 &mut self,
                 id: impl Into<String>,
-            ) -> $crate::client::exec::Exec<'_, $crate::$payload> {
+            ) -> $crate::client::exec::Exec<'_, $crate::payloads::$payload> {
                 $crate::client::exec::Exec::new(
                     self,
-                    $crate::$payload {
+                    $crate::payloads::$payload {
                         unique_identifier: Some(id.into()),
                     },
                 )
             }
         }
 
-        impl<'a> $crate::BatchClient<'a> {
+        impl<'a> $crate::client::BatchClient<'a> {
             pub fn $method(
                 self,
                 id: Option<String>,
-            ) -> $crate::client::exec::Exec<'a, $crate::$payload> {
+            ) -> $crate::client::exec::Exec<'a, $crate::payloads::$payload> {
                 $crate::client::exec::Exec::new(
                     self.0,
-                    $crate::$payload {
+                    $crate::payloads::$payload {
                         unique_identifier: id,
                     },
                 )

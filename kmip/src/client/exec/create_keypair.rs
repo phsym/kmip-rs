@@ -1,7 +1,10 @@
 use crate::{
-    Attribute, AttributeValue, BatchClient, Client, CreateKeyPairRequestPayload,
-    CryptographicAlgorithm, CryptographicDomainParameters, CryptographicLength,
-    CryptographicUsageMask, Name, RecommendedCurve,
+    CryptographicUsageMask,
+    attributes::{Attribute, AttributeValue, CryptographicLength},
+    client::{BatchClient, Client},
+    enums::{CryptographicAlgorithm, RecommendedCurve},
+    payloads::CreateKeyPairRequestPayload,
+    types::{CryptographicDomainParameters, Name},
 };
 
 use super::{Attributed, Exec, WantExec};

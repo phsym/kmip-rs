@@ -1,8 +1,10 @@
 use ttlv::{Decodable, Encodable};
 
 use crate::{
-    Attribute, KeyCompressionType, KeyFormatType, KeyWrapType, KeyWrappingSpecification, Object,
-    ObjectType, Tags,
+    Tags,
+    attributes::Attribute,
+    enums::{KeyCompressionType, KeyFormatType, KeyWrapType, ObjectType},
+    objects::{KeyWrappingSpecification, Object},
 };
 
 /// This operation requests the server to Import a Managed Object specified by its Unique Identifier.

@@ -9,8 +9,10 @@ use boring::{
 use ttlv::BigInteger;
 
 use crate::{
-    CryptographicAlgorithm, KeyCompressionType, KeyFormatType, KeyMaterial, Object, PrivateKey,
-    PublicKey, RecommendedCurve, TransparentECPrivateKey, TransparentECPublicKey,
+    enums::{CryptographicAlgorithm, KeyCompressionType, KeyFormatType, RecommendedCurve},
+    objects::{
+        KeyMaterial, Object, PrivateKey, PublicKey, TransparentECPrivateKey, TransparentECPublicKey,
+    },
 };
 
 use super::super::{
@@ -52,7 +54,7 @@ impl TryFrom<Option<Nid>> for RecommendedCurve {
 
 impl ToKeyMaterial<PublicKey> for EcKey<Public> {
     const ALGORITHM: CryptographicAlgorithm = CryptographicAlgorithm::EC;
-    const KEY_COMPRESSION: Option<crate::KeyCompressionType> =
+    const KEY_COMPRESSION: Option<KeyCompressionType> =
         Some(KeyCompressionType::ECPublicKeyTypeUncompressed);
     type Format = FormatEcPublic;
 

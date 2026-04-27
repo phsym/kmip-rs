@@ -1,4 +1,4 @@
-use crate::{ProtocolVersion, Tags};
+use crate::{Tags, types::ProtocolVersion};
 use ttlv::{Decodable, Encodable};
 
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]

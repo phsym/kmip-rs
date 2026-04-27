@@ -1,4 +1,8 @@
-use crate::{AddAttributeRequestPayload, AttributeValue, BatchClient, Client};
+use crate::{
+    attributes::AttributeValue,
+    client::{BatchClient, Client},
+    payloads::AddAttributeRequestPayload,
+};
 
 use super::Exec;
 

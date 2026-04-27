@@ -1,4 +1,7 @@
-use crate::{BatchClient, Client, GetUsageAllocationRequestPayload};
+use crate::{
+    client::{BatchClient, Client},
+    payloads::GetUsageAllocationRequestPayload,
+};
 
 use super::Exec;
 

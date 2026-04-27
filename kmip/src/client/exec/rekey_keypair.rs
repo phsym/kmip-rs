@@ -1,11 +1,16 @@
 use chrono::Duration;
 
 use crate::{
-    Attribute, BatchClient, Client, Name, ReKeyKeyPairRequestPayload,
-    exec::{
-        Attributed, Exec, WantExec,
-        create_keypair::{WantCommonAttributes, WantPrivateAttributes, WantPublicAttributes},
+    attributes::Attribute,
+    client::{
+        BatchClient, Client,
+        exec::{
+            Attributed, Exec, WantExec,
+            create_keypair::{WantCommonAttributes, WantPrivateAttributes, WantPublicAttributes},
+        },
     },
+    payloads::ReKeyKeyPairRequestPayload,
+    types::Name,
 };
 
 pub type ReKeyKeyPairExec<'a, S> = Exec<'a, ReKeyKeyPairRequestPayload, S>;

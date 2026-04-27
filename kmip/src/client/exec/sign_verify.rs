@@ -1,6 +1,8 @@
 use super::{Exec, WantExec};
 use crate::{
-    BatchClient, Client, CryptographicParameters, SignRequestPayload, SignatureVerifyRequestPayload,
+    client::{BatchClient, Client},
+    payloads::{SignRequestPayload, SignatureVerifyRequestPayload},
+    types::CryptographicParameters,
 };
 
 pub type SignExec<'a, S> = Exec<'a, SignRequestPayload, S>;

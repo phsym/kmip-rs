@@ -1,4 +1,8 @@
-use crate::{BatchClient, Client, QueryFunction, QueryRequestPayload};
+use crate::{
+    client::{BatchClient, Client},
+    enums::QueryFunction,
+    payloads::QueryRequestPayload,
+};
 
 use super::Exec;
 

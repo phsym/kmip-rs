@@ -1,6 +1,7 @@
 use crate::{
-    CryptographicAlgorithm, KeyBlock, KeyCompressionType, KeyFormatType, KeyMaterial, KeyValue,
-    Object, PlainKeyValue, ProtocolVersion, RecommendedCurve,
+    enums::{CryptographicAlgorithm, KeyCompressionType, KeyFormatType, RecommendedCurve},
+    objects::{KeyBlock, KeyMaterial, KeyValue, Object, PlainKeyValue},
+    types::ProtocolVersion,
 };
 
 #[cfg(feature = "interop-openssl")]
@@ -487,7 +488,7 @@ mod tests {
     fn kmip_error_converts_via_from() {
         // `Object::try_from` on the wrong variant returns `UnexpectedObject`; the
         // `?`-propagation must promote that into a `KeyError` without ad-hoc strings.
-        use crate::{PrivateKey, PublicKey};
+        use crate::objects::{PrivateKey, PublicKey};
         let pk = PrivateKey::from(KeyBlock {
             key_format_type: KeyFormatType::Raw,
             key_compression_type: None,
@@ -510,10 +511,9 @@ mod tests {
     #[cfg(feature = "interop-rsa")]
     #[test]
     fn rsa_public_key_rejects_wrong_algorithm_with_typed_error() {
-        use crate::PublicKey as PublicKeyObj;
         use ::rsa::RsaPublicKey;
 
-        let obj: Object = PublicKeyObj::from(make_key_block(
+        let obj: Object = crate::objects::PublicKey::from(make_key_block(
             KeyFormatType::PKCS1,
             Some(CryptographicAlgorithm::AES),
             KeyMaterial::Bytes(vec![0u8; 4]),
@@ -536,10 +536,9 @@ mod tests {
     #[cfg(feature = "interop-rsa")]
     #[test]
     fn rsa_private_key_rejects_unsupported_format_with_typed_error() {
-        use crate::PrivateKey as PrivateKeyObj;
         use ::rsa::RsaPrivateKey;
 
-        let obj: Object = PrivateKeyObj::from(make_key_block(
+        let obj: Object = crate::objects::PrivateKey::from(make_key_block(
             KeyFormatType::Raw,
             Some(CryptographicAlgorithm::RSA),
             KeyMaterial::Bytes(vec![0u8; 4]),
@@ -556,7 +555,7 @@ mod tests {
     #[cfg(feature = "interop-rsa")]
     #[test]
     fn rsa_private_key_rejects_missing_private_exponent() {
-        use crate::TransparentRSAPrivateKey;
+        use crate::objects::TransparentRSAPrivateKey;
         let transparent = TransparentRSAPrivateKey {
             modulus: ttlv::BigInteger::unsigned(vec![1]),
             private_exponent: None,
@@ -667,7 +666,7 @@ mod tests {
     #[cfg(feature = "interop-p256")]
     #[test]
     fn ec_public_key_rejects_curve_mismatch_with_typed_error() {
-        use crate::{PublicKey as PublicKeyObj, TransparentECPublicKey};
+        use crate::objects::{PublicKey as PublicKeyObj, TransparentECPublicKey};
         let obj: Object = PublicKeyObj::from(make_key_block(
             KeyFormatType::TransparentECPublicKey,
             Some(CryptographicAlgorithm::EC),

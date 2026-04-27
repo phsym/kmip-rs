@@ -1,7 +1,12 @@
 use crate::{
-    BatchClient, Client, ExportRequestPayload, ImportRequestPayload, KeyCompressionType,
-    KeyFormatType, KeyWrapType, KeyWrappingSpecification, Object,
-    exec::{Attributed, Exec},
+    attributes::Attribute,
+    client::{
+        BatchClient, Client,
+        exec::{Attributed, Exec},
+    },
+    enums::{KeyCompressionType, KeyFormatType, KeyWrapType},
+    objects::{KeyWrappingSpecification, Object},
+    payloads::{ExportRequestPayload, ImportRequestPayload},
 };
 
 pub type ImportExec<'a> = Exec<'a, ImportRequestPayload>;
@@ -80,7 +85,7 @@ impl ImportExec<'_> {
 }
 
 impl Attributed for ImportExec<'_> {
-    fn attributes_mut(&mut self) -> &mut Vec<crate::Attribute> {
+    fn attributes_mut(&mut self) -> &mut Vec<Attribute> {
         &mut self.req.attribute
     }
 }

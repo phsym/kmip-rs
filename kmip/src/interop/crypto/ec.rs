@@ -7,9 +7,11 @@ use elliptic_curve::{
 use pkcs8::AssociatedOid;
 
 use crate::{
-    CryptographicAlgorithm, KeyCompressionType, KeyError, KeyFormatType, KeyMaterial, Object,
-    PrivateKey, PublicKey, RecommendedCurve, ToKeyMaterial, TransparentECPrivateKey,
-    TransparentECPublicKey,
+    enums::{CryptographicAlgorithm, KeyCompressionType, KeyFormatType, RecommendedCurve},
+    interop::{KeyError, ToKeyMaterial},
+    objects::{
+        KeyMaterial, Object, PrivateKey, PublicKey, TransparentECPrivateKey, TransparentECPublicKey,
+    },
 };
 use ttlv::BigInteger;
 
@@ -45,7 +47,7 @@ where
     FieldBytesSize<C>: ModulusSize,
 {
     const ALGORITHM: CryptographicAlgorithm = CryptographicAlgorithm::EC;
-    const KEY_COMPRESSION: Option<crate::KeyCompressionType> =
+    const KEY_COMPRESSION: Option<KeyCompressionType> =
         Some(KeyCompressionType::ECPublicKeyTypeUncompressed);
     type Format = FormatEcPublic;
 

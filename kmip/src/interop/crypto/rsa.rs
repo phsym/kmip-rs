@@ -8,8 +8,12 @@ use rsa::{
 use ttlv::BigInteger;
 
 use crate::{
-    CryptographicAlgorithm, KeyError, KeyFormatType, KeyMaterial, Object, PrivateKey, PublicKey,
-    ToKeyMaterial, TransparentRSAPrivateKey, TransparentRSAPublicKey,
+    enums::{CryptographicAlgorithm, KeyFormatType},
+    interop::{KeyError, ToKeyMaterial},
+    objects::{
+        KeyMaterial, Object, PrivateKey, PublicKey, TransparentRSAPrivateKey,
+        TransparentRSAPublicKey,
+    },
 };
 
 use super::super::{FormatRsaPrivate, FormatRsaPublic, FromObject, bytes_to_bit_length};

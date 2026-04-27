@@ -1,7 +1,7 @@
 use chrono::Local;
 use ttlv::{Decodable, Encodable};
 
-use crate::{RevocationReason, Tags};
+use crate::{Tags, types::RevocationReason};
 
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]

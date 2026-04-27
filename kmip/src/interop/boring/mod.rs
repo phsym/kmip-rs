@@ -4,7 +4,10 @@ use boring::{
     rsa::Rsa,
 };
 
-use crate::{CryptographicAlgorithm, KeyFormatType, PrivateKey, PublicKey};
+use crate::{
+    enums::{CryptographicAlgorithm, KeyFormatType},
+    objects::{PrivateKey, PublicKey},
+};
 
 use super::{FormatPrivate, FormatPublic, FromObject, KeyError, ToObject};
 
@@ -17,7 +20,7 @@ impl ToObject<PrivateKey> for PKey<Private> {
     fn to_kmip_object(
         &self,
         format: Self::Format,
-        vers: crate::ProtocolVersion,
+        vers: crate::types::ProtocolVersion,
     ) -> Result<PrivateKey, KeyError> {
         match self.id() {
             Id::RSA => self.rsa()?.to_kmip_object(format.into(), vers),
@@ -33,7 +36,7 @@ impl ToObject<PublicKey> for PKey<Public> {
     fn to_kmip_object(
         &self,
         format: Self::Format,
-        vers: crate::ProtocolVersion,
+        vers: crate::types::ProtocolVersion,
     ) -> Result<PublicKey, KeyError> {
         match self.id() {
             Id::RSA => self.rsa()?.to_kmip_object(format.into(), vers),
@@ -44,7 +47,7 @@ impl ToObject<PublicKey> for PKey<Public> {
 }
 
 impl FromObject<PublicKey> for PKey<Public> {
-    fn from_kmip_object(object: crate::Object) -> Result<Self, KeyError> {
+    fn from_kmip_object(object: crate::objects::Object) -> Result<Self, KeyError> {
         let pubkey = <&PublicKey>::try_from(&object)?;
         match pubkey.key_block.cryptographic_algorithm {
             Some(CryptographicAlgorithm::RSA) => {
@@ -78,7 +81,7 @@ impl FromObject<PublicKey> for PKey<Public> {
 }
 
 impl FromObject<PrivateKey> for PKey<Private> {
-    fn from_kmip_object(object: crate::Object) -> Result<Self, KeyError> {
+    fn from_kmip_object(object: crate::objects::Object) -> Result<Self, KeyError> {
         let privkey = <&PrivateKey>::try_from(&object)?;
 
         match privkey.key_block.cryptographic_algorithm {

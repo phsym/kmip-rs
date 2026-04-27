@@ -1,6 +1,9 @@
 use ttlv::{Decodable, Encodable};
 
-use crate::{Attribute, ObjectGroupMember, ProtocolVersion, StorageStatusMask, Tags};
+use crate::{
+    StorageStatusMask, Tags, attributes::Attribute, enums::ObjectGroupMember,
+    types::ProtocolVersion,
+};
 
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
