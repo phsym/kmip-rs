@@ -15,7 +15,7 @@ KMIP — application code defines its own tags and types.
 
 - [`TtlvEncoder`] / [`TtlvDecoder`] for the canonical KMIP binary form.
 - [`XmlEncoder`] / [`XmlDecoder`] for the XML representation defined in
-  *KMIP Additional Message Encodings* (feature `xml`).
+  _KMIP Additional Message Encodings_ (feature `xml`).
 - [`TextEncoder`] for a human-readable, debug-oriented form (feature `text`).
 - [`Encodable`] / [`Decodable`] traits, plus `#[derive(Encodable, Decodable, Enum)]`
   procedural macros (feature `derive`) for mapping Rust structs and enums
