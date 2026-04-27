@@ -1,6 +1,8 @@
 use super::{Exec, WantExec};
 use crate::{
-    BatchClient, Client, CryptographicParameters, DecryptRequestPayload, EncryptRequestPayload,
+    client::{BatchClient, Client},
+    payloads::{DecryptRequestPayload, EncryptRequestPayload},
+    types::CryptographicParameters,
 };
 
 pub type EncryptExec<'a, S> = Exec<'a, EncryptRequestPayload, S>;

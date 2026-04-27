@@ -36,8 +36,12 @@ AES-256 symmetric key:
 
 ```rust,no_run
 # use kmip::{
-#     Attribute, ClientBuilder, CreateRequestPayload, CryptographicAlgorithm,
-#     CryptographicLength, CryptographicUsageMask, ObjectType, TemplateAttribute,
+#     CryptographicUsageMask,
+#     attributes::{Attribute, CryptographicLength},
+#     client::ClientBuilder,
+#     enums::{CryptographicAlgorithm, ObjectType},
+#     payloads::CreateRequestPayload,
+#     types::TemplateAttribute,
 # };
 #
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -65,7 +69,7 @@ AES-256 symmetric key:
 The same operation written with the fluent helpers on `Client`:
 
 ```rust,no_run
-# use kmip::{ClientBuilder, CryptographicUsageMask};
+# use kmip::{CryptographicUsageMask, client::ClientBuilder};
 #
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = ClientBuilder::new()

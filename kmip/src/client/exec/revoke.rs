@@ -1,6 +1,11 @@
 use chrono::Local;
 
-use crate::{BatchClient, Client, RevocationReason, RevocationReasonCode, RevokeRequestPayload};
+use crate::{
+    client::{BatchClient, Client},
+    enums::RevocationReasonCode,
+    payloads::RevokeRequestPayload,
+    types::RevocationReason,
+};
 
 use super::Exec;
 

@@ -1,6 +1,6 @@
 use ttlv::{Decodable, Encodable};
 
-use crate::{Tags, TemplateAttribute};
+use crate::{Tags, types::TemplateAttribute};
 
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]

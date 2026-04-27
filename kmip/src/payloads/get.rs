@@ -3,9 +3,14 @@ use std::str;
 use ttlv::{Decodable, Encodable};
 
 use crate::{
-    Certificate, FromObject, KeyCompressionType, KeyError, KeyFormatType, KeyMaterial, KeyWrapType,
-    KeyWrappingSpecification, Object, ObjectType, PrivateKey, ProtocolVersion, PublicKey,
-    SecretData, SymmetricKey, Tags,
+    Tags,
+    enums::{KeyCompressionType, KeyFormatType, KeyWrapType, ObjectType},
+    interop::{FromObject, KeyError},
+    objects::{
+        Certificate, KeyMaterial, KeyWrappingSpecification, Object, PrivateKey, PublicKey,
+        SecretData, SymmetricKey,
+    },
+    types::ProtocolVersion,
 };
 
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]

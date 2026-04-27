@@ -3,12 +3,15 @@
 use std::{cmp::Ordering, str::FromStr};
 
 use crate::{
-    AlternativeNameType, AttestationType, BlockCipherMode, CredentialType, CryptographicAlgorithm,
-    DRBGAlgorithm, DestroyAction, DigitalSignatureAlgorithm, FIPS186Variation, HashingAlgorithm,
-    KeyFormatType, KeyRoleType, KeyValueLocationType, LinkType, MaskGenerator, NameType,
-    PaddingMethod, ProfileName, RNGAlgorithm, RNGMode, RecommendedCurve, RevocationReasonCode,
-    ShreddingAlgorithm, UnwrapMode, UsageLimitsUnit, ValidationAuthorityType, ValidationType,
     attributes::Attribute,
+    enums::{
+        AlternativeNameType, AttestationType, BlockCipherMode, CredentialType,
+        CryptographicAlgorithm, DRBGAlgorithm, DestroyAction, DigitalSignatureAlgorithm,
+        FIPS186Variation, HashingAlgorithm, KeyFormatType, KeyRoleType, KeyValueLocationType,
+        LinkType, MaskGenerator, NameType, PaddingMethod, ProfileName, RNGAlgorithm, RNGMode,
+        RecommendedCurve, RevocationReasonCode, ShreddingAlgorithm, UnwrapMode, UsageLimitsUnit,
+        ValidationAuthorityType, ValidationType,
+    },
 };
 
 use super::Tags;

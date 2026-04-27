@@ -3,8 +3,8 @@ use std::{collections::HashMap, marker::PhantomData, panic::RefUnwindSafe};
 use tracing::{debug, error, error_span};
 
 use crate::{
-    Operations, ProtocolError, Request, RequestMessage, RequestPayload, ResponseBatchItem,
-    ResponseHeader, ResponseMessage, ResponsePayload, ResultReason, ResultStatus,
+    Operations, ProtocolError, RequestMessage, RequestPayload, ResponseBatchItem, ResponseHeader,
+    ResponseMessage, ResponsePayload, ResultReason, ResultStatus, payloads::Request,
 };
 
 use super::RequestHandler;
@@ -185,7 +185,9 @@ impl RequestHandler for Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DiscoverVersionsRequestPayload, ProtocolVersion, RequestBatchItem, RequestHeader};
+    use crate::{
+        ProtocolVersion, RequestBatchItem, RequestHeader, payloads::DiscoverVersionsRequestPayload,
+    };
 
     fn make_request(batch_count: i32, item_count: usize) -> RequestMessage {
         let items: Vec<RequestBatchItem> = (0..item_count)
@@ -288,7 +290,7 @@ mod tests {
 
     #[test]
     fn payload_handler_wrapper_returns_invalid_message_on_type_mismatch() {
-        use crate::{ActivateRequestPayload, ActivateResponsePayload};
+        use crate::payloads::{ActivateRequestPayload, ActivateResponsePayload};
 
         let wrapper = PayloadHandlerWrapper(FnOperationWrapper(
             |_: ActivateRequestPayload| -> Result<ActivateResponsePayload, ProtocolError> {

@@ -1,6 +1,10 @@
 use crate::{
-    Attribute, BatchClient, Client, CreateRequestPayload, CryptographicAlgorithm,
-    CryptographicLength, CryptographicUsageMask, Name, ObjectType, TemplateAttribute,
+    CryptographicUsageMask,
+    attributes::{Attribute, CryptographicLength},
+    client::{BatchClient, Client},
+    enums::{CryptographicAlgorithm, ObjectType},
+    payloads::CreateRequestPayload,
+    types::{Name, TemplateAttribute},
 };
 
 use super::{Attributed, Exec};

@@ -1,5 +1,9 @@
 use crate::{
-    Attribute, BatchClient, Client, LocateRequestPayload, ObjectGroupMember, StorageStatusMask,
+    StorageStatusMask,
+    attributes::Attribute,
+    client::{BatchClient, Client},
+    enums::ObjectGroupMember,
+    payloads::LocateRequestPayload,
 };
 
 use super::{Attributed, Exec};

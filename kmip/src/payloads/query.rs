@@ -1,9 +1,12 @@
 use ttlv::{Decodable, Encodable, MaybeKnownTag, Value};
 
 use crate::{
-    AttestationType, CapabilityInformation, ClientRegistrationMethod, ExtensionInformation,
-    ObjectType, Operations, ProfileInformation, ProtocolVersion, QueryFunction, RNGParameters,
-    Tags, ValidationInformation,
+    Tags,
+    enums::{AttestationType, ClientRegistrationMethod, ObjectType, Operations, QueryFunction},
+    types::{
+        CapabilityInformation, ExtensionInformation, ProfileInformation, ProtocolVersion,
+        RNGParameters, ValidationInformation,
+    },
 };
 
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]

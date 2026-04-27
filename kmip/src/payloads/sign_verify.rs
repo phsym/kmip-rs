@@ -1,6 +1,10 @@
 use ttlv::{Decodable, Encodable};
 
-use crate::{CryptographicParameters, ProtocolVersion, Tags, ValidityIndicator};
+use crate::{
+    Tags,
+    enums::ValidityIndicator,
+    types::{CryptographicParameters, ProtocolVersion},
+};
 
 /// This operation requests the server to perform a signature operation on the provided data using a
 /// Managed Cryptographic Object as the key for the signature operation.

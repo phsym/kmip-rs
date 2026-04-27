@@ -5,9 +5,14 @@ use ttlv::{
 };
 
 use crate::{
-    Attribute, CertificateType, CryptographicAlgorithm, CryptographicParameters, EncodingOption,
-    KeyCompressionType, KeyFormatType, ObjectType, OpaqueDataType, ProtocolVersion,
-    RecommendedCurve, SecretDataType, SplitKeyMethod, Tags, TryAsMut, TryAsRef, WrappingMethod,
+    Tags, TryAsMut, TryAsRef,
+    attributes::Attribute,
+    enums::{
+        CertificateType, CryptographicAlgorithm, EncodingOption, KeyCompressionType, KeyFormatType,
+        ObjectType, OpaqueDataType, RecommendedCurve, SecretDataType, SplitKeyMethod,
+        WrappingMethod,
+    },
+    types::{CryptographicParameters, ProtocolVersion},
 };
 
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]

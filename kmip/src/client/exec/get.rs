@@ -1,6 +1,8 @@
 use crate::{
-    BatchClient, Client, GetRequestPayload, KeyCompressionType, KeyFormatType, KeyWrapType,
-    KeyWrappingSpecification,
+    client::{BatchClient, Client},
+    enums::{KeyCompressionType, KeyFormatType, KeyWrapType},
+    objects::KeyWrappingSpecification,
+    payloads::GetRequestPayload,
 };
 
 use super::Exec;

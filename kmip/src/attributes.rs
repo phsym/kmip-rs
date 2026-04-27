@@ -4,12 +4,17 @@ use chrono::{DateTime, Duration, Local};
 use ttlv::{Decodable, Decoder, Encodable, Encoder, MaybeKnownTag, Value};
 
 use crate::{
-    AlternativeName, ApplicationSpecificInformation, CertificateIdentifier, CertificateIssuer,
-    CertificateSubject, CertificateType, CryptographicAlgorithm, CryptographicDomainParameters,
-    CryptographicParameters, CryptographicUsageMask, Digest, DigitalSignatureAlgorithm,
-    KeyValueLocation, Link, Name, ObjectType, RNGParameters, RevocationReason, State, Tags,
-    TryAsMut, TryAsRef, UsageLimits, X509CertificateIdentifier, X509CertificateIssuer,
-    X509CertificateSubject,
+    Tags, TryAsMut, TryAsRef,
+    bitmasks::CryptographicUsageMask,
+    enums::{
+        CertificateType, CryptographicAlgorithm, DigitalSignatureAlgorithm, ObjectType, State,
+    },
+    types::{
+        AlternativeName, ApplicationSpecificInformation, CertificateIdentifier, CertificateIssuer,
+        CertificateSubject, CryptographicDomainParameters, CryptographicParameters, Digest,
+        KeyValueLocation, Link, Name, RNGParameters, RevocationReason, UsageLimits,
+        X509CertificateIdentifier, X509CertificateIssuer, X509CertificateSubject,
+    },
 };
 
 pub trait AttributeType: Into<AttributeValue> + 'static {

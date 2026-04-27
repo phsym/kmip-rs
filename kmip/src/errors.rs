@@ -2,7 +2,7 @@ use core::fmt;
 
 use thiserror::Error;
 
-use crate::{ObjectType, ResultReason, ResultStatus};
+use crate::{ResultReason, ResultStatus, enums::ObjectType};
 
 pub type Result<T> = std::result::Result<T, Error>;
 

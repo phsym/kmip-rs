@@ -1,6 +1,6 @@
 use std::env;
 
-use kmip::{Client, ClientBuilder, CorrelationValueMiddleware, DebugMiddleware};
+use kmip::client::{Client, ClientBuilder, CorrelationValueMiddleware, DebugMiddleware};
 
 pub fn new_client() -> Client {
     let addr = env::var("KMIP_TEST_ADDR")

@@ -2,7 +2,10 @@ use std::borrow::Borrow;
 
 use ttlv::{Decodable, Encodable};
 
-use crate::{Attribute, AttributeName, Tags};
+use crate::{
+    Tags,
+    attributes::{Attribute, AttributeName},
+};
 
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]

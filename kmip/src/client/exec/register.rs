@@ -1,8 +1,14 @@
 use crate::{
-    Attribute, BatchClient, Certificate, CertificateType, Client, CryptographicAlgorithm,
-    CryptographicUsageMask, FormatSymmetric, KeyBlock, KeyError, KeyFormatType, KeyMaterial,
-    KeyValue, Object, PlainKeyValue, PrivateKey, PublicKey, RegisterRequestPayload, SecretData,
-    SecretDataType, SymmetricKey, ToObject, TransparentSymmetricKey, interop::bytes_to_bit_length,
+    CryptographicUsageMask,
+    attributes::Attribute,
+    client::{BatchClient, Client},
+    enums::{CertificateType, CryptographicAlgorithm, KeyFormatType, SecretDataType},
+    interop::{FormatSymmetric, KeyError, ToObject, bytes_to_bit_length},
+    objects::{
+        Certificate, KeyBlock, KeyMaterial, KeyValue, Object, PlainKeyValue, PrivateKey, PublicKey,
+        SecretData, SymmetricKey, TransparentSymmetricKey,
+    },
+    payloads::RegisterRequestPayload,
 };
 
 use super::{Attributed, Exec};
@@ -42,7 +48,7 @@ impl<'a> RegisterExecWantType<'a> {
             secret_data_type: secret_type,
             key_block: KeyBlock {
                 key_format_type: KeyFormatType::Raw,
-                key_value: Some(crate::KeyValue::Plain(PlainKeyValue {
+                key_value: Some(KeyValue::Plain(PlainKeyValue {
                     key_material: KeyMaterial::Bytes(value.into()),
                     attributes: Vec::new(),
                 })),

@@ -1,6 +1,8 @@
 use crate::{
-    BatchErrorContinuationOption, Client, Error, Request, RequestPayload, ResponseBatchIter,
-    Result, exec::Exec,
+    Error, Result,
+    client::{Client, ResponseBatchIter, exec::Exec},
+    enums::BatchErrorContinuationOption,
+    payloads::{Request, RequestPayload},
 };
 
 pub struct BatchClient<'a>(pub(crate) &'a mut Client);

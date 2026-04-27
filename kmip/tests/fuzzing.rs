@@ -4,12 +4,14 @@ mod setup;
 #[cfg(all(feature = "arbitrary", feature = "_integration_tests"))]
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use kmip::{
-        CreateRequestPayload, ObjectType, ProtocolVersion, RequestMessage, RequestPayload,
-        TemplateAttribute,
+        RequestMessage,
+        enums::ObjectType,
+        payloads::{CreateRequestPayload, RequestPayload},
+        types::{ProtocolVersion, TemplateAttribute},
     };
+
+    use super::*;
 
     #[test]
     fn fuzz() {

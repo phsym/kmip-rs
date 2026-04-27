@@ -1,6 +1,11 @@
 use chrono::Duration;
 
-use crate::{Attribute, BatchClient, Client, Name, ReKeyRequestPayload, TemplateAttribute};
+use crate::{
+    attributes::Attribute,
+    client::{BatchClient, Client},
+    payloads::ReKeyRequestPayload,
+    types::{Name, TemplateAttribute},
+};
 
 use super::{Attributed, Exec};
 
