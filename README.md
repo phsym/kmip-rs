@@ -35,56 +35,50 @@ Connect to a KMIP server with rustls (the default TLS backend) and create an
 AES-256 symmetric key:
 
 ```rust,no_run
-# use kmip::{
-#     CryptographicUsageMask,
-#     attributes::{Attribute, CryptographicLength},
-#     client::ClientBuilder,
-#     enums::{CryptographicAlgorithm, ObjectType},
-#     payloads::CreateRequestPayload,
-#     types::TemplateAttribute,
-# };
-#
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = ClientBuilder::new()
-        .add_root_certificate_file("ca.pem")?
-        .identity_file("client.pem", "client.key")?
-        .connect_rustls("kmip.example.com:5696", "kmip.example.com")?;
+use kmip::{
+    CryptographicUsageMask,
+    attributes::{Attribute, CryptographicLength},
+    client::ClientBuilder,
+    enums::{CryptographicAlgorithm, ObjectType},
+    payloads::CreateRequestPayload,
+    types::TemplateAttribute,
+};
 
-    let response = client.request(CreateRequestPayload {
-        object_type: ObjectType::SymmetricKey,
-        attributes: TemplateAttribute::new(vec![
-            Attribute::new(CryptographicAlgorithm::AES),
-            Attribute::new(CryptographicLength(256)),
-            Attribute::new(
-                CryptographicUsageMask::Encrypt | CryptographicUsageMask::Decrypt,
-            ),
-        ]),
-    })?;
+let mut client = ClientBuilder::new()
+    .add_root_certificate_file("ca.pem").unwrap()
+    .identity_file("client.pem", "client.key").unwrap()
+    .connect_rustls("kmip.example.com:5696", "kmip.example.com").unwrap();
 
-    println!("created key: {:?}", response);
-#     Ok(())
-# }
+let response = client.request(CreateRequestPayload {
+    object_type: ObjectType::SymmetricKey,
+    attributes: TemplateAttribute::new(vec![
+        Attribute::new(CryptographicAlgorithm::AES),
+        Attribute::new(CryptographicLength(256)),
+        Attribute::new(
+            CryptographicUsageMask::Encrypt | CryptographicUsageMask::Decrypt,
+        ),
+    ]),
+}).unwrap();
+
+println!("created key: {:?}", response);
 ```
 
 The same operation written with the fluent helpers on `Client`:
 
 ```rust,no_run
-# use kmip::{CryptographicUsageMask, client::ClientBuilder};
-#
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = ClientBuilder::new()
-        .add_root_certificate_file("ca.pem")?
-        .identity_file("client.pem", "client.key")?
-        .connect_rustls("kmip.example.com:5696", "kmip.example.com")?;
+use kmip::{CryptographicUsageMask, client::ClientBuilder};
 
-    let response = client
-        .create()
-        .aes(256, CryptographicUsageMask::Encrypt | CryptographicUsageMask::Decrypt)
-        .exec()?;
+let mut client = ClientBuilder::new()
+    .add_root_certificate_file("ca.pem").unwrap()
+    .identity_file("client.pem", "client.key").unwrap()
+    .connect_rustls("kmip.example.com:5696", "kmip.example.com").unwrap();
 
-    println!("created key: {:?}", response);
-#     Ok(())
-# }
+let response = client
+    .create()
+    .aes(256, CryptographicUsageMask::Encrypt | CryptographicUsageMask::Decrypt)
+    .exec().unwrap();
+
+println!("created key: {:?}", response);
 ```
 
 Each operation has a dedicated builder under [`client::exec`](kmip/src/client/exec)

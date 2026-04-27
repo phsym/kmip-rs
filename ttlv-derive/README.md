@@ -104,7 +104,8 @@ Omit the struct-level `tag` to only generate the tagged impls. The caller
 must supply a tag at each use site via `tag_encode` / `tag_decode`.
 
 ```rust,ignore
-# use ttlv::{Encodable, Decodable};
+use ttlv::{Encodable, Decodable};
+
 #[derive(Encodable, Decodable)]
 pub struct Untagged {
     #[ttlv(tag = 0x42_00_30u32)]
@@ -121,7 +122,8 @@ level — no wrapping TTLV struct is written. Useful for splitting a flat
 message across multiple Rust types.
 
 ```rust,ignore
-# use ttlv::{Encodable, Decodable};
+use ttlv::{Encodable, Decodable};
+
 #[derive(Encodable, Decodable)]
 #[ttlv(flatten)]
 pub struct Flat {
@@ -139,7 +141,8 @@ outer struct body. The inner type must also derive `Encodable`/`Decodable`
 so that its `flatten_encode` / `flatten_decode` inherent methods exist.
 
 ```rust,ignore
-# use ttlv::{Encodable, Decodable};
+use ttlv::{Encodable, Decodable};
+
 #[derive(Encodable, Decodable)]
 #[ttlv(tag = 0x42_00_20u32)]
 pub struct Inner {
@@ -169,7 +172,8 @@ This is how version-dependent fields are expressed without creating a new
 type per protocol version.
 
 ```rust,ignore
-# use ttlv::{Encodable, Decodable};
+use ttlv::{Encodable, Decodable};
+
 #[derive(Encodable, Decodable)]
 #[ttlv(tag = 0x42_00_40u32)]
 pub struct WithAttrs {
@@ -266,7 +270,8 @@ traits (blanket impls in the `ttlv` crate), so they can appear as field
 types without any extra attributes:
 
 ```rust,ignore
-# use ttlv::{Encodable, Decodable, RawTag, Struct, Value};
+use ttlv::{Encodable, Decodable, RawTag, Struct, Value};
+
 #[derive(Encodable, Decodable)]
 #[ttlv(tag = 0x42_00_90u32)]
 pub struct Leaf {
@@ -313,7 +318,8 @@ Enumeration value. Use `#[derive(Enum)]` alongside to also get `name()`
 and `Display`.
 
 ```rust,ignore
-# use ttlv::{Encodable, Decodable, Enum, RawTag};
+use ttlv::{Encodable, Decodable, Enum, RawTag};
+
 #[derive(Clone, Enum, Encodable, Decodable)]
 #[ttlv(enum, tag = 0x42_00_50u32)]
 #[repr(u32)]
@@ -338,7 +344,8 @@ from its caller — appropriate when the same enum is reused under multiple
 tags:
 
 ```rust,ignore
-# use ttlv::{Encodable, Decodable, Enum};
+use ttlv::{Encodable, Decodable, Enum};
+
 #[derive(Enum, Encodable, Decodable)]
 #[ttlv(enum)]
 #[repr(u32)]
@@ -358,7 +365,8 @@ A tagged struct-like enum wraps each variant's payload in its own TTLV
 struct:
 
 ```rust,ignore
-# use ttlv::Encodable;
+use ttlv::Encodable;
+
 #[derive(Encodable)]
 #[ttlv(tag = 0x42_00_70u32)]
 pub struct LoginDetails {
@@ -386,13 +394,16 @@ the canonical KMIP "Credential" pattern, where the payload shape changes
 but the tag comes from the inner struct itself:
 
 ```rust,ignore
-# use ttlv::Encodable;
-# #[derive(Encodable)]
-# #[ttlv(tag = 0x42_00_60u32)]
-# pub struct UserPassword { #[ttlv(tag = 0x42_00_61u32)] pub username: String }
-# #[derive(Encodable)]
-# #[ttlv(tag = 0x42_00_62u32)]
-# pub struct Token { #[ttlv(tag = 0x42_00_63u32)] pub value: String }
+use ttlv::Encodable;
+
+#[derive(Encodable)]
+#[ttlv(tag = 0x42_00_60u32)]
+pub struct UserPassword { #[ttlv(tag = 0x42_00_61u32)] pub username: String }
+
+#[derive(Encodable)]
+#[ttlv(tag = 0x42_00_62u32)]
+pub struct Token { #[ttlv(tag = 0x42_00_63u32)] pub value: String }
+
 #[derive(Encodable)]
 #[ttlv(flatten)]
 pub enum Credential {
@@ -405,10 +416,12 @@ An untagged struct-like enum produces a `TagEncodable` impl only — the
 caller passes the tag in at every use site:
 
 ```rust,ignore
-# use ttlv::Encodable;
-# #[derive(Encodable)]
-# #[ttlv(tag = 0x42_00_80u32)]
-# pub struct Leaf { #[ttlv(tag = 0x42_00_81u32)] pub value: i32 }
+use ttlv::Encodable;
+
+#[derive(Encodable)]
+#[ttlv(tag = 0x42_00_80u32)]
+pub struct Leaf { #[ttlv(tag = 0x42_00_81u32)] pub value: i32 }
+
 #[derive(Encodable)]
 pub enum Either {
     Left(Leaf),

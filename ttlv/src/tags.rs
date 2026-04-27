@@ -147,7 +147,9 @@ pub trait Tag {
             (Some(n), Some(s)) => RawTagRef::NumStr(n, s),
             (Some(n), None) => RawTagRef::Num(n),
             (None, Some(s)) => RawTagRef::Str(s),
-            (None, None) => panic!("Tag::raw called on a tag with neither a numeric nor a name form"),
+            (None, None) => {
+                panic!("Tag::raw called on a tag with neither a numeric nor a name form")
+            }
         }
     }
     /// Returns whether two tags identify the same item.

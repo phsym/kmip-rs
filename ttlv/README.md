@@ -41,13 +41,12 @@ struct Greeting {
 let original = Greeting { code: 42, message: "hello".into() };
 
 let mut enc = TtlvEncoder::new();
-original.encode(&mut enc)?;
+original.encode(&mut enc).unwrap();
 
 let mut dec = TtlvDecoder::new(enc.bytes());
-let decoded = Greeting::decode(&mut dec)?;
+let decoded = Greeting::decode(&mut dec).unwrap();
 
 assert_eq!(original, decoded);
-# Ok::<(), ttlv::Error>(())
 ```
 
 Working with the encoder directly is also possible — the [`Encoder`] and
@@ -61,8 +60,7 @@ enc.write_struct(0x420020u32, |s| {
     s.write_integer(0x420004u32, 254)?;
     s.write_string(0x420005u32, "hi")?;
     Ok(())
-})?;
-# Ok::<(), ttlv::Error>(())
+}).unwrap();
 ```
 
 ## Cargo features
