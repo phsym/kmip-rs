@@ -3,6 +3,7 @@
 > This project is a **WORK IN PROGRESS**
 
 [![Test](https://github.com/phsym/kmip-rs/actions/workflows/test.yaml/badge.svg)](https://github.com/phsym/kmip-rs/actions/workflows/test.yaml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 ## Implementation status
 
@@ -172,3 +173,18 @@
 | Always Sensitive                 |  N/A |  N/A |  N/A |  N/A |  ✅  |
 | Extractable                      |  N/A |  N/A |  N/A |  N/A |  ✅  |
 | Never Extractable                |  N/A |  N/A |  N/A |  N/A |  ✅  |
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+
+at your option.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall
+be dual licensed as above, without any additional terms or conditions.
