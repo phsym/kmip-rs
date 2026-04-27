@@ -9,5 +9,5 @@ repository = "https://github.com/phsym/kmip-rs"
 rust-version = "1.88.0"
 authors = ["Pierre-Henri Symoneaux"]
 edition = "2024"
-version = "0.2.0"
+version = "0.3.0"
 license = "MIT OR Apache-2.0"
