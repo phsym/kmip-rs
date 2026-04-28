@@ -26,6 +26,7 @@ use quote::{quote, quote_spanned};
 use syn::{Data, DataEnum, DataStruct, DeriveInput, Error, Ident, Result, spanned::Spanned};
 
 use crate::fields::{FieldInfo, clone_bounds_where_clause};
+use crate::path::ttlv_path;
 use crate::ttlv_enum::parse_ttlv_variants;
 use crate::{AttrExt, CallMode, EnumAttr, EnumEnumAttr, StructAttr};
 
@@ -47,6 +48,7 @@ pub fn derive_decodable_fn2(item: TokenStream2) -> Result<TokenStream2> {
 // --- Struct decoding ---
 
 fn derive_struct(data: DataStruct, ident: Ident, struct_attr: StructAttr) -> Result<TokenStream2> {
+    let ttlv = ttlv_path();
     let field_infos = FieldInfo::from_fields(data.fields)?;
 
     let mut stmts = Vec::new();
@@ -73,7 +75,7 @@ fn derive_struct(data: DataStruct, ident: Ident, struct_attr: StructAttr) -> Res
             if let Some(ref filter) = f.if_filter {
                 call = quote! {
                     let #var = {
-                        use ::ttlv::ExtensionsExt;
+                        use #ttlv::ExtensionsExt;
                         let _ext = d.extensions();
                         if #filter {
                             #call;
@@ -108,7 +110,7 @@ fn derive_struct(data: DataStruct, ident: Ident, struct_attr: StructAttr) -> Res
     let mut impls = if let CallMode::Flatten = struct_attr.call_mode {
         vec![quote! {
             impl #ident {
-                pub fn flatten_decode<D: ::ttlv::Decoder>(d: &mut D) -> ::ttlv::Result<Self> #where_clause {
+                pub fn flatten_decode<D: #ttlv::Decoder>(d: &mut D) -> #ttlv::Result<Self> #where_clause {
                     #(#stmts;) *
                     let res = Self {
                         #(#idents), *
@@ -117,17 +119,17 @@ fn derive_struct(data: DataStruct, ident: Ident, struct_attr: StructAttr) -> Res
                 }
             }
 
-            impl ::ttlv::Decodable for #ident {
-                fn decode(d: &mut impl ::ttlv::Decoder) -> ::ttlv::Result<Self> {
+            impl #ttlv::Decodable for #ident {
+                fn decode(d: &mut impl #ttlv::Decoder) -> #ttlv::Result<Self> {
                     Self::flatten_decode(d)
                 }
             }
         }]
     } else {
         vec![quote! {
-            impl ::ttlv::TagDecodable for #ident {
-                fn decode<D: ::ttlv::Decoder>(tag: impl ::ttlv::Tag, decoder: &mut D) -> ::ttlv::Result<Self> {
-                    use ::ttlv::Decoder;
+            impl #ttlv::TagDecodable for #ident {
+                fn decode<D: #ttlv::Decoder>(tag: impl #ttlv::Tag, decoder: &mut D) -> #ttlv::Result<Self> {
+                    use #ttlv::Decoder;
                     decoder.read_struct(tag, |d| {
                         Self::flatten_decode(d)
                     })
@@ -135,7 +137,7 @@ fn derive_struct(data: DataStruct, ident: Ident, struct_attr: StructAttr) -> Res
             }
 
             impl #ident {
-                pub fn flatten_decode<D: ::ttlv::Decoder>(d: &mut D) -> ::ttlv::Result<Self> #where_clause {
+                pub fn flatten_decode<D: #ttlv::Decoder>(d: &mut D) -> #ttlv::Result<Self> #where_clause {
                     #(#stmts;) *
                     let res = Self {
                         #(#idents), *
@@ -148,8 +150,8 @@ fn derive_struct(data: DataStruct, ident: Ident, struct_attr: StructAttr) -> Res
 
     if let CallMode::Tag(tag) = struct_attr.call_mode {
         impls.push(quote! {
-            impl ::ttlv::Decodable for #ident {
-                fn decode(decoder: &mut impl ::ttlv::Decoder) -> ::ttlv::Result<Self> {
+            impl #ttlv::Decodable for #ident {
+                fn decode(decoder: &mut impl #ttlv::Decoder) -> #ttlv::Result<Self> {
                     decoder.tag_decode(#tag)
                 }
             }
@@ -178,10 +180,11 @@ fn derive_enum(en: DataEnum, ident: Ident, enum_attr: EnumAttr) -> Result<TokenS
 /// - The `#[ttlv(default)]` variant becomes the catch-all `_ =>` arm
 /// - If no default variant exists, the catch-all returns `Error::InvalidEnum`
 fn derive_enum_enum(en: DataEnum, ident: Ident, enum_attr: EnumEnumAttr) -> Result<TokenStream2> {
+    let ttlv = ttlv_path();
     let variants = parse_ttlv_variants(&en)?;
 
     let mut branches = Vec::new();
-    let mut default_branch = quote! {_ => Err(::ttlv::Error::InvalidEnum{tag: tag.raw().to_owned(), value: val.raw().to_owned()})};
+    let mut default_branch = quote! {_ => Err(#ttlv::Error::InvalidEnum{tag: tag.raw().to_owned(), value: val.raw().to_owned()})};
     for var in &variants {
         let vident = &var.ident;
         if var.is_default {
@@ -199,9 +202,9 @@ fn derive_enum_enum(en: DataEnum, ident: Ident, enum_attr: EnumEnumAttr) -> Resu
     }
 
     let mut impls = vec![quote! {
-        impl ::ttlv::TagDecodable for #ident {
-            fn decode<D: ::ttlv::Decoder>(tag: impl ::ttlv::Tag, decoder: &mut D) -> ::ttlv::Result<Self> {
-                use ::ttlv::Tag;
+        impl #ttlv::TagDecodable for #ident {
+            fn decode<D: #ttlv::Decoder>(tag: impl #ttlv::Tag, decoder: &mut D) -> #ttlv::Result<Self> {
+                use #ttlv::Tag;
                 let val = decoder.read_enum(&tag)?;
                 match (val.numeric(), val.name()) {
                     #(#branches,) *
@@ -213,8 +216,8 @@ fn derive_enum_enum(en: DataEnum, ident: Ident, enum_attr: EnumEnumAttr) -> Resu
 
     if let Some(tag) = enum_attr.tag {
         impls.push(quote! {
-            impl ::ttlv::Decodable for #ident {
-                fn decode(decoder: &mut impl ::ttlv::Decoder) -> ::ttlv::Result<Self> {
+            impl #ttlv::Decodable for #ident {
+                fn decode(decoder: &mut impl #ttlv::Decoder) -> #ttlv::Result<Self> {
                     decoder.tag_decode(#tag)
                 }
             }

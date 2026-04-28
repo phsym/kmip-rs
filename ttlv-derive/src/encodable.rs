@@ -22,6 +22,7 @@ use syn::{
 };
 
 use crate::fields::{FieldInfo, clone_bounds_where_clause};
+use crate::path::ttlv_path;
 use crate::ttlv_enum::parse_ttlv_variants;
 use crate::{AttrExt, CallMode, EnumAttr, EnumEnumAttr, StructAttr};
 
@@ -86,6 +87,7 @@ fn derive_enum(en: DataEnum, ident: Ident, enum_attr: EnumAttr) -> Result<TokenS
 /// `encoder.write_enum(tag, value)`. The `#[ttlv(default)]` variant short-circuits
 /// with `return encoder.write_enum(tag, value)` since its inner value is already a tag.
 fn derive_enum_enum(en: DataEnum, ident: Ident, enum_attr: EnumEnumAttr) -> Result<TokenStream2> {
+    let ttlv = ttlv_path();
     let variants = parse_ttlv_variants(&en)?;
 
     let mut branches = Vec::new();
@@ -123,8 +125,8 @@ fn derive_enum_enum(en: DataEnum, ident: Ident, enum_attr: EnumEnumAttr) -> Resu
     };
 
     let mut impls = vec![quote! {
-        impl ::ttlv::TagEncodable for #ident {
-            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) -> ::ttlv::Result<()> {
+        impl #ttlv::TagEncodable for #ident {
+            fn encode<E: #ttlv::Encoder>(&self, tag: impl #ttlv::Tag, encoder: &mut E) -> #ttlv::Result<()> {
                 #body
             }
         }
@@ -196,6 +198,7 @@ fn impl_fields_encode(
     encoder_ident: &str,
     variant: Option<Ident>,
 ) -> Result<(TokenStream2, Vec<Type>)> {
+    let ttlv = ttlv_path();
     let encoder = Ident::new(encoder_ident, Span::call_site());
     let field_infos = FieldInfo::from_fields(fields)?;
 
@@ -228,12 +231,12 @@ fn impl_fields_encode(
         if let Some(ref filter) = f.if_filter {
             call = quote! {
                 {
-                    use ::ttlv::ExtensionsExt;
+                    use #ttlv::ExtensionsExt;
                     let _ext = #encoder.extensions();
                     if #filter {
                         #call
                     } else {
-                        ::ttlv::Result::Ok(())
+                        #ttlv::Result::Ok(())
                     }
                 }
             };
@@ -244,12 +247,12 @@ fn impl_fields_encode(
     let branch = if let Some(varname) = variant {
         quote! {Self::#varname{#(#bindings), *} => {
             #(#stmts ?;)*
-            ::ttlv::Result::Ok(())
+            #ttlv::Result::Ok(())
         }}
     } else {
         quote! {Self{#(#bindings), *} => {
             #(#stmts ?;)*
-            ::ttlv::Result::Ok(())
+            #ttlv::Result::Ok(())
         }}
     };
     Ok((branch, set_ext_types))
@@ -270,11 +273,12 @@ fn impl_inner_encode(
     body: TokenStream2,
     set_ext_types: &[Type],
 ) -> TokenStream2 {
+    let ttlv = ttlv_path();
     let encoder = Ident::new(encoder_ident, Span::call_site());
     let where_clause = clone_bounds_where_clause(set_ext_types);
     quote! {
         impl #ident {
-            fn inner_encode(&self, #encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> #where_clause {
+            fn inner_encode(&self, #encoder: &mut impl #ttlv::Encoder) -> #ttlv::Result<()> #where_clause {
                 #body
             }
         }
@@ -284,10 +288,11 @@ fn impl_inner_encode(
 /// Generates `TagEncodable` impl (wraps `inner_encode` in `write_struct`) and
 /// the public `flatten_encode()` method (used by parent types with `#[ttlv(flatten)]` fields).
 fn impl_tag_encodable(ident: &Ident) -> TokenStream2 {
+    let ttlv = ttlv_path();
     quote! {
-        impl ::ttlv::TagEncodable for #ident {
-            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) -> ::ttlv::Result<()> {
-                use ::ttlv::Encoder;
+        impl #ttlv::TagEncodable for #ident {
+            fn encode<E: #ttlv::Encoder>(&self, tag: impl #ttlv::Tag, encoder: &mut E) -> #ttlv::Result<()> {
+                use #ttlv::Encoder;
                 encoder.write_struct(tag, |e| {
                     self.flatten_encode(e)
                 })
@@ -295,7 +300,7 @@ fn impl_tag_encodable(ident: &Ident) -> TokenStream2 {
         }
 
         impl #ident {
-            pub fn flatten_encode<E: ::ttlv::Encoder>(&self, e: &mut E) -> ::ttlv::Result<()> {
+            pub fn flatten_encode<E: #ttlv::Encoder>(&self, e: &mut E) -> #ttlv::Result<()> {
                 self.inner_encode(e)
             }
         }
@@ -304,9 +309,10 @@ fn impl_tag_encodable(ident: &Ident) -> TokenStream2 {
 
 /// Generates `Encodable` impl that delegates to `tag_encode` with the given tag.
 fn impl_encodable(ident: &Ident, tag: &Expr) -> TokenStream2 {
+    let ttlv = ttlv_path();
     quote! {
-        impl ::ttlv::Encodable for #ident {
-            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
+        impl #ttlv::Encodable for #ident {
+            fn encode(&self, encoder: &mut impl #ttlv::Encoder) -> #ttlv::Result<()> {
                 encoder.tag_encode(#tag, self)
             }
         }
@@ -316,9 +322,10 @@ fn impl_encodable(ident: &Ident, tag: &Expr) -> TokenStream2 {
 /// Generates `Encodable` impl for flattened types (delegates directly to `inner_encode`,
 /// without wrapping in `write_struct`).
 fn impl_flattened_encode(ident: &Ident) -> TokenStream2 {
+    let ttlv = ttlv_path();
     quote! {
-        impl ::ttlv::Encodable for #ident {
-            fn encode(&self, encoder: &mut impl ::ttlv::Encoder) -> ::ttlv::Result<()> {
+        impl #ttlv::Encodable for #ident {
+            fn encode(&self, encoder: &mut impl #ttlv::Encoder) -> #ttlv::Result<()> {
                 self.inner_encode(encoder)
             }
         }

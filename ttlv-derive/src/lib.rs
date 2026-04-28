@@ -5,6 +5,7 @@ mod decodable;
 mod derive_enum;
 mod encodable;
 mod fields;
+mod path;
 mod ttlv_enum;
 
 #[cfg(test)]
