@@ -104,14 +104,31 @@ impl<IO: std::io::Read> Stream<IO> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Encodable, Encoder};
     use std::io::Cursor;
 
-    /// Dummy type for testing Stream::receive — never actually decoded.
+    // Decode is never invoked — Stream::receive returns before getting that far in these tests.
     #[derive(Debug)]
     struct Dummy;
     impl Decodable for Dummy {
         fn decode(_: &mut impl crate::Decoder) -> Result<Self> {
             unreachable!()
+        }
+    }
+
+    // A real, decodable TTLV message — used where Dummy can't be (send/roundtrip paths).
+    #[derive(Debug, PartialEq)]
+    struct Msg(i32);
+
+    impl Encodable for Msg {
+        fn encode(&self, encoder: &mut impl Encoder) -> Result<()> {
+            encoder.write_struct(0x420020u32, |e| e.write_integer(0x420001u32, self.0))
+        }
+    }
+
+    impl Decodable for Msg {
+        fn decode(decoder: &mut impl crate::Decoder) -> Result<Self> {
+            decoder.read_struct(0x420020u32, |d| d.read_integer(0x420001u32).map(Msg))
         }
     }
 
@@ -143,5 +160,78 @@ mod tests {
         let err = stream.receive::<Dummy>().unwrap_err();
         // Should fail with EOF (no body data), NOT with InvalidData (size rejection)
         assert!(matches!(err, Error::EOF));
+    }
+
+    #[test]
+    fn test_receive_eof_before_any_bytes() {
+        let mut stream = Stream::new(Cursor::new([]));
+        let err = stream.receive::<Dummy>().unwrap_err();
+        assert!(matches!(err, Error::Io(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof));
+    }
+
+    #[test]
+    fn test_stream_into_inner() {
+        let cursor = Cursor::new(vec![0u8; 0]);
+        let stream = Stream::new(cursor);
+        let inner = stream.into_inner();
+        assert_eq!(inner.position(), 0);
+    }
+
+    #[test]
+    fn test_stream_with_max_message_size() {
+        // Verify custom limit is honoured: 100-byte limit, 32 MiB declared length → rejected
+        let header: [u8; 8] = [0x42, 0x00, 0x20, 0x01, 0x02, 0x00, 0x00, 0x00];
+        let mut stream = Stream::new(Cursor::new(header)).with_max_message_size(100);
+        let err = stream.receive::<Dummy>().unwrap_err();
+        assert!(matches!(err, Error::Io(ref e) if e.kind() == std::io::ErrorKind::InvalidData));
+    }
+
+    #[test]
+    fn test_send_writes_encoded_message() {
+        let mut buf = Vec::new();
+        let mut stream = Stream::new(&mut buf);
+        stream.send(&Msg(42)).unwrap();
+
+        let mut dec = crate::TtlvDecoder::new(&buf);
+        let decoded: Msg = Decodable::decode(&mut dec).unwrap();
+        assert_eq!(decoded, Msg(42));
+    }
+
+    #[test]
+    fn test_roundtrip() {
+        let mut enc = crate::TtlvEncoder::new();
+        Msg(99).encode(&mut enc).unwrap();
+        let bytes = enc.into_inner();
+
+        // Pre-load the response in a cursor and route the stream through it.
+        let duplex = DuplexCursor {
+            read: Cursor::new(bytes),
+            write: Vec::new(),
+        };
+        let mut stream = Stream::new(duplex);
+
+        // The send-side payload is irrelevant — only the read-side matters here.
+        let decoded: Msg = stream.roundtrip(&Msg(0)).unwrap();
+        assert_eq!(decoded, Msg(99));
+    }
+
+    struct DuplexCursor {
+        read: Cursor<Vec<u8>>,
+        write: Vec<u8>,
+    }
+
+    impl std::io::Read for DuplexCursor {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.read.read(buf)
+        }
+    }
+
+    impl std::io::Write for DuplexCursor {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.write.write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.write.flush()
+        }
     }
 }

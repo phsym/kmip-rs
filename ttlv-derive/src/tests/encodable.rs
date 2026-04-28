@@ -535,3 +535,59 @@ fn test_ttlv_enum_with_default_and_rename() {
     let output = derive_encodable_fn2(source).unwrap();
     assert_eq!(expected.to_string(), output.to_string())
 }
+
+// --- Error paths ---
+
+#[test]
+fn test_union_returns_error() {
+    let source: TokenStream2 = parse_quote! {
+        #[ttlv(tag = 1)]
+        union Toto {
+            a: u32,
+            b: u32,
+        }
+    };
+    let err = derive_encodable_fn2(source).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Only enums and structs are supported")
+    );
+}
+
+// Pins the alternate code-gen path: with only a `#[ttlv(default)]` variant
+// there are no non-default branches, so the body is `match self { ... }` with
+// every arm diverging via `return`.
+#[test]
+fn test_only_default_variant_emits_match_only_body() {
+    let source: TokenStream2 = parse_quote! {
+        #[ttlv(enum)]
+        enum Toto {
+            #[ttlv(default)]
+            Unknown(RawTag),
+        }
+    };
+    let expected: TokenStream2 = parse_quote! {
+        impl ::ttlv::TagEncodable for Toto {
+            fn encode<E: ::ttlv::Encoder>(&self, tag: impl ::ttlv::Tag, encoder: &mut E) -> ::ttlv::Result<()> {
+                match self {
+                    Self::Unknown(value) => return encoder.write_enum(tag, value)
+                }
+            }
+        }
+    };
+    let output = derive_encodable_fn2(source).unwrap();
+    assert_eq!(expected.to_string(), output.to_string());
+}
+
+#[test]
+fn test_duplicate_default_attr_rejected() {
+    let source: TokenStream2 = parse_quote! {
+        #[ttlv(enum)]
+        enum Toto {
+            #[ttlv(default, default)]
+            Unknown(RawTag),
+        }
+    };
+    let err = derive_encodable_fn2(source).unwrap_err();
+    assert!(err.to_string().contains("default defined more than once"));
+}

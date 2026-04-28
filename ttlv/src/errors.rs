@@ -119,24 +119,124 @@ impl From<Infallible> for Error {
     }
 }
 
-// pub trait ResultExt<T> {
-//     fn unwrap_eof(self) -> std::result::Result<Option<T>, Error>;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-//     // fn unwrap_eof_or_default(self) -> std::result::Result<T, Error>
-//     // where
-//     //     Self: Sized,
-//     //     T: Default,
-//     // {
-//     //     Ok(self.unwrap_eof()?.unwrap_or_default())
-//     // }
-// }
+    #[test]
+    fn test_expected_only_display() {
+        let e: Expected<&str> = Expected::Only("foo");
+        assert_eq!(e.to_string(), "foo");
+    }
 
-// impl<T> ResultExt<T> for std::result::Result<T, Error> {
-//     fn unwrap_eof(self) -> std::result::Result<Option<T>, Error> {
-//         match self {
-//             Ok(v) => Ok(Some(v)),
-//             Err(Error::EOF) => Ok(None),
-//             Err(e) => Err(e),
-//         }
-//     }
-// }
+    #[test]
+    fn test_expected_one_of_display() {
+        let e: Expected<&str> = Expected::OneOf(vec!["a", "b", "c"]);
+        assert_eq!(e.to_string(), "one of [a, b, c]");
+    }
+
+    #[test]
+    fn test_expected_one_of_single_display() {
+        let e: Expected<&str> = Expected::OneOf(vec!["x"]);
+        assert_eq!(e.to_string(), "one of [x]");
+    }
+
+    #[test]
+    fn test_error_eof_display() {
+        assert_eq!(Error::EOF.to_string(), "EOF");
+    }
+
+    #[test]
+    fn test_error_invalid_type_display() {
+        assert_eq!(Error::InvalidType(99).to_string(), "invalid TTLV type 99");
+    }
+
+    #[test]
+    fn test_error_invalid_tag_display() {
+        let e = Error::InvalidTag(RawTag::Num(0x420001));
+        assert_eq!(e.to_string(), "invalid TTLV tag 0x420001");
+    }
+
+    #[test]
+    fn test_error_value_out_of_bound_display() {
+        assert_eq!(Error::ValueOutOfBound.to_string(), "Value is out of bound");
+    }
+
+    #[test]
+    fn test_error_missing_tag_display() {
+        assert_eq!(Error::MissingTag.to_string(), "Tag is missing");
+    }
+
+    #[test]
+    fn test_error_missing_value_display() {
+        assert_eq!(Error::MissingValue.to_string(), "Value is missing");
+    }
+
+    #[test]
+    fn test_error_tag_missing_numeric_display() {
+        let e = Error::TagMissingNumeric {
+            tag: RawTag::Str("MyTag".into()),
+        };
+        assert_eq!(
+            e.to_string(),
+            "tag MyTag has no numeric form (required by encoder)"
+        );
+    }
+
+    #[test]
+    fn test_error_invalid_bitmask_value_display() {
+        let e = Error::InvalidBitmaskValue("bad".into());
+        assert_eq!(e.to_string(), "Invalid bitmask value: bad");
+    }
+
+    #[test]
+    fn test_error_invalid_type_str_display() {
+        let e = Error::InvalidTypeStr("notatype".into());
+        assert_eq!(e.to_string(), "invalid TTLV type notatype");
+    }
+
+    #[test]
+    fn test_error_unexpected_tag_display() {
+        let e = Error::UnexpectedTag {
+            got: RawTag::Num(0x420001),
+            expected: Expected::Only(RawTag::Num(0x420002)),
+        };
+        assert_eq!(
+            e.to_string(),
+            "Unexpected TTLV tag. Got 0x420001 but expected 0x420002"
+        );
+    }
+
+    #[test]
+    fn test_error_unexpected_type_display() {
+        use crate::Type;
+        let e = Error::UnexpectedType {
+            got: Type::Integer,
+            expected: Expected::Only(Type::Boolean),
+            tag: RawTag::Num(0x420001),
+        };
+        assert_eq!(
+            e.to_string(),
+            "Unexpected TTLV type on tag 0x420001. Got Integer but expected Boolean"
+        );
+    }
+
+    #[test]
+    fn test_error_invalid_struct_display() {
+        let e = Error::InvalidStruct(RawTag::Num(0x420001), Box::new(Error::EOF));
+        assert_eq!(e.to_string(), "Invalid structure (tag = 0x420001): EOF");
+    }
+
+    #[test]
+    fn test_error_invalid_enum_display() {
+        let e = Error::InvalidEnum {
+            tag: RawTag::Num(0x420001),
+            value: RawTag::Num(0xFF),
+        };
+        assert_eq!(
+            e.to_string(),
+            "The value 0x0000FF for enum 0x420001 is invalid"
+        );
+    }
+}
+

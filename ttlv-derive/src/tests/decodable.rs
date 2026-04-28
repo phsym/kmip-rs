@@ -346,3 +346,21 @@ fn test_enum_with_default() {
     let output = derive_decodable_fn2(source).unwrap();
     assert_eq!(expected.to_string(), output.to_string())
 }
+
+// --- Error paths ---
+
+#[test]
+fn test_union_returns_error() {
+    let source: TokenStream2 = parse_quote! {
+        #[ttlv(tag = 1)]
+        union Toto {
+            a: u32,
+            b: u32,
+        }
+    };
+    let err = derive_decodable_fn2(source).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Only enums and structs are supported")
+    );
+}

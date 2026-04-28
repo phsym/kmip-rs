@@ -319,3 +319,299 @@ impl<T: Tag + TryFrom<RawTag, Error = Error>> TryFrom<RawTag> for MaybeKnownTag<
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- RawTagRef conversions --
+
+    #[test]
+    fn test_raw_tag_ref_from_u32() {
+        let r = RawTagRef::from(0x420001u32);
+        assert_eq!(r, RawTagRef::Num(0x420001));
+    }
+
+    #[test]
+    fn test_raw_tag_ref_from_str() {
+        let r = RawTagRef::from("MyTag");
+        assert_eq!(r, RawTagRef::Str("MyTag"));
+    }
+
+    #[test]
+    fn test_raw_tag_ref_from_tuple() {
+        let r = RawTagRef::from((0x420001u32, "MyTag"));
+        assert_eq!(r, RawTagRef::NumStr(0x420001, "MyTag"));
+    }
+
+    // -- RawTag From<T> via RawTagRef --
+
+    #[test]
+    fn test_raw_tag_from_u32() {
+        let t = RawTag::from(0x420001u32);
+        assert_eq!(t, RawTag::Num(0x420001));
+    }
+
+    #[test]
+    fn test_raw_tag_from_str_via_ref() {
+        // RawTag::from(&str) has a lifetime constraint — use RawTagRef as intermediate
+        let t = RawTagRef::from("Hello").to_owned();
+        assert_eq!(t, RawTag::Str("Hello".into()));
+    }
+
+    #[test]
+    fn test_raw_tag_from_tuple_via_ref() {
+        let t = RawTagRef::from((0x420001u32, "Hi")).to_owned();
+        assert_eq!(t, RawTag::NumStr(0x420001, "Hi".into()));
+    }
+
+    // -- to_owned / get_ref round-trip --
+
+    #[test]
+    fn test_raw_tag_ref_to_owned_num() {
+        let r = RawTagRef::Num(42);
+        assert_eq!(r.to_owned(), RawTag::Num(42));
+    }
+
+    #[test]
+    fn test_raw_tag_ref_to_owned_str() {
+        let r = RawTagRef::Str("abc");
+        assert_eq!(r.to_owned(), RawTag::Str("abc".into()));
+    }
+
+    #[test]
+    fn test_raw_tag_ref_to_owned_num_str() {
+        let r = RawTagRef::NumStr(1, "one");
+        assert_eq!(r.to_owned(), RawTag::NumStr(1, "one".into()));
+    }
+
+    #[test]
+    fn test_raw_tag_get_ref_num() {
+        let t = RawTag::Num(7);
+        assert_eq!(t.get_ref(), RawTagRef::Num(7));
+    }
+
+    #[test]
+    fn test_raw_tag_get_ref_str() {
+        let t = RawTag::Str("x".into());
+        assert_eq!(t.get_ref(), RawTagRef::Str("x"));
+    }
+
+    #[test]
+    fn test_raw_tag_get_ref_num_str() {
+        let t = RawTag::NumStr(5, "five".into());
+        assert_eq!(t.get_ref(), RawTagRef::NumStr(5, "five"));
+    }
+
+    // -- Debug / Display formatting --
+
+    #[test]
+    fn test_raw_tag_ref_debug_num() {
+        let r = RawTagRef::Num(0x420001);
+        assert_eq!(format!("{r:?}"), "0x420001");
+    }
+
+    #[test]
+    fn test_raw_tag_ref_display_num() {
+        let r = RawTagRef::Num(0x420001);
+        assert_eq!(format!("{r}"), "0x420001");
+    }
+
+    #[test]
+    fn test_raw_tag_ref_debug_str() {
+        let r = RawTagRef::Str("Tag");
+        assert_eq!(format!("{r:?}"), "Tag");
+    }
+
+    #[test]
+    fn test_raw_tag_ref_display_str() {
+        let r = RawTagRef::Str("Tag");
+        assert_eq!(format!("{r}"), "Tag");
+    }
+
+    #[test]
+    fn test_raw_tag_ref_debug_num_str() {
+        let r = RawTagRef::NumStr(0x420001, "MyTag");
+        assert_eq!(format!("{r:?}"), "MyTag/0x420001");
+    }
+
+    #[test]
+    fn test_raw_tag_ref_display_num_str() {
+        let r = RawTagRef::NumStr(0x420001, "MyTag");
+        assert_eq!(format!("{r}"), "MyTag/0x420001");
+    }
+
+    #[test]
+    fn test_raw_tag_debug_display() {
+        let t = RawTag::Num(0x420001);
+        assert_eq!(format!("{t:?}"), format!("{:?}", t.get_ref()));
+        assert_eq!(format!("{t}"), format!("{}", t.get_ref()));
+    }
+
+    // -- Tag trait implementations --
+
+    #[test]
+    fn test_tag_u32_numeric_and_name() {
+        let t: u32 = 0x420001;
+        assert_eq!(t.numeric(), Some(0x420001));
+        assert_eq!(t.name(), None);
+    }
+
+    #[test]
+    fn test_tag_str_numeric_and_name() {
+        let t: &str = "hello";
+        assert_eq!(t.numeric(), None);
+        assert_eq!(t.name(), Some("hello"));
+    }
+
+    #[test]
+    fn test_tag_tuple_u32_str() {
+        let t = (0x420001u32, "MyTag");
+        assert_eq!(t.numeric(), Some(0x420001));
+        assert_eq!(t.name(), Some("MyTag"));
+    }
+
+    #[test]
+    fn test_tag_tuple_u32_option_str_some() {
+        let t = (0x420001u32, Some("MyTag"));
+        assert_eq!(t.numeric(), Some(0x420001));
+        assert_eq!(t.name(), Some("MyTag"));
+    }
+
+    #[test]
+    fn test_tag_tuple_u32_option_str_none() {
+        let t = (0x420001u32, None::<&str>);
+        assert_eq!(t.numeric(), Some(0x420001));
+        assert_eq!(t.name(), None);
+    }
+
+    #[test]
+    fn test_tag_raw_tag_ref_num() {
+        let r = RawTagRef::Num(0x420001);
+        assert_eq!(r.numeric(), Some(0x420001));
+        assert_eq!(r.name(), None);
+    }
+
+    #[test]
+    fn test_tag_raw_tag_ref_str() {
+        let r = RawTagRef::Str("x");
+        assert_eq!(r.numeric(), None);
+        assert_eq!(r.name(), Some("x"));
+    }
+
+    #[test]
+    fn test_tag_raw_tag_ref_num_str() {
+        let r = RawTagRef::NumStr(1, "one");
+        assert_eq!(r.numeric(), Some(1));
+        assert_eq!(r.name(), Some("one"));
+    }
+
+    #[test]
+    fn test_tag_raw_tag_num() {
+        let t = RawTag::Num(0x420001);
+        assert_eq!(t.numeric(), Some(0x420001));
+        assert_eq!(t.name(), None);
+    }
+
+    #[test]
+    fn test_tag_raw_tag_str() {
+        let t = RawTag::Str("foo".into());
+        assert_eq!(t.numeric(), None);
+        assert_eq!(t.name(), Some("foo"));
+    }
+
+    #[test]
+    fn test_tag_raw_tag_num_str() {
+        let t = RawTag::NumStr(2, "two".into());
+        assert_eq!(t.numeric(), Some(2));
+        assert_eq!(t.name(), Some("two"));
+    }
+
+    // -- Tag::raw() --
+
+    #[test]
+    fn test_tag_raw_num_only() {
+        let r = 0x420001u32.raw();
+        assert_eq!(r, RawTagRef::Num(0x420001));
+    }
+
+    #[test]
+    fn test_tag_raw_str_only() {
+        let r = "hello".raw();
+        assert_eq!(r, RawTagRef::Str("hello"));
+    }
+
+    #[test]
+    fn test_tag_raw_num_str() {
+        let r = (0x1u32, "one").raw();
+        assert_eq!(r, RawTagRef::NumStr(1, "one"));
+    }
+
+    // -- Tag::matches() --
+    // Use explicit UFCS to avoid conflict with str::matches(Pattern).
+
+    #[test]
+    fn test_tag_matches_by_numeric() {
+        assert!(Tag::matches(&0x420001u32, &0x420001u32));
+        assert!(!Tag::matches(&0x420001u32, &0x420002u32));
+    }
+
+    #[test]
+    fn test_tag_matches_by_name() {
+        let a = RawTag::Str("hello".into());
+        let b = RawTag::Str("hello".into());
+        let c = RawTag::Str("world".into());
+        assert!(Tag::matches(&a, &b));
+        assert!(!Tag::matches(&a, &c));
+    }
+
+    #[test]
+    fn test_tag_matches_num_vs_str_no_match() {
+        // u32 has no name, RawTag::Str has no numeric — neither side has both, so no match
+        let s = RawTag::Str("hello".into());
+        assert!(!Tag::matches(&0x420001u32, &s));
+    }
+
+    // -- Tag::numeric_or_err() --
+
+    #[test]
+    fn test_tag_numeric_or_err_ok() {
+        let v = 0x420001u32.numeric_or_err().unwrap();
+        assert_eq!(v, 0x420001);
+    }
+
+    #[test]
+    fn test_tag_numeric_or_err_missing() {
+        let err = "StringOnlyTag".numeric_or_err().unwrap_err();
+        assert!(matches!(err, Error::TagMissingNumeric { .. }));
+    }
+
+    // -- &T impl for Tag --
+
+    #[test]
+    fn test_tag_ref_impl() {
+        // Exercises the blanket `impl<T: Tag> Tag for &T` (rather than `u32`'s
+        // direct `Tag` impl) — UFCS bypasses auto-deref.
+        let t: u32 = 0x420001;
+        let r: &u32 = &t;
+        assert_eq!(<&u32 as Tag>::numeric(&r), Some(0x420001));
+        assert_eq!(<&u32 as Tag>::name(&r), None);
+    }
+
+    // -- MaybeKnownTag --
+
+    #[test]
+    fn test_maybe_known_tag_known_numeric() {
+        // Use u32 as the "known" tag type
+        let t: MaybeKnownTag<u32> = MaybeKnownTag::Known(0x420001u32);
+        assert_eq!(t.numeric(), Some(0x420001));
+        assert_eq!(t.name(), None);
+    }
+
+    #[test]
+    fn test_maybe_known_tag_unknown_str() {
+        let t: MaybeKnownTag<u32> = MaybeKnownTag::Unknown(RawTag::Str("foo".into()));
+        assert_eq!(t.numeric(), None);
+        assert_eq!(t.name(), Some("foo"));
+    }
+}

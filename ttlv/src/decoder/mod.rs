@@ -248,3 +248,253 @@ impl TagDecodable for chrono::NaiveDateTime {
         Ok(<chrono::DateTime<chrono::Utc> as TagDecodable>::decode(tag, decoder)?.naive_utc())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{Decodable, Encoder, TagDecodable, TtlvDecoder, TtlvEncoder};
+    use std::time;
+
+    fn encode_integer(tag: u32, value: i32) -> Vec<u8> {
+        let mut enc = TtlvEncoder::new();
+        enc.write_integer(tag, value).unwrap();
+        enc.into_inner()
+    }
+
+    fn encode_long(tag: u32, value: i64) -> Vec<u8> {
+        let mut enc = TtlvEncoder::new();
+        enc.write_long(tag, value).unwrap();
+        enc.into_inner()
+    }
+
+    fn encode_interval(tag: u32, seconds: u32) -> Vec<u8> {
+        let mut enc = TtlvEncoder::new();
+        enc.write_interval(tag, seconds).unwrap();
+        enc.into_inner()
+    }
+
+    fn encode_datetime(tag: u32, ts: i64) -> Vec<u8> {
+        let mut enc = TtlvEncoder::new();
+        enc.write_datetime(tag, ts).unwrap();
+        enc.into_inner()
+    }
+
+    // -- Option<T> TagDecodable --
+
+    #[test]
+    fn test_option_present() {
+        let bytes = encode_integer(0x420001, 42);
+        let mut dec = TtlvDecoder::new(&bytes);
+        let v: Option<i32> = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v, Some(42));
+    }
+
+    #[test]
+    fn test_option_absent_eof() {
+        // Empty buffer → EOF → None
+        let mut dec = TtlvDecoder::new(&[]);
+        let v: Option<i32> = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v, None);
+    }
+
+    #[test]
+    fn test_option_absent_wrong_tag() {
+        let bytes = encode_integer(0x420002, 99);
+        let mut dec = TtlvDecoder::new(&bytes);
+        let v: Option<i32> = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v, None);
+    }
+
+    // -- Option<T> Decodable (self-tagged) --
+
+    #[test]
+    fn test_option_decodable_absent_eof() {
+        // TTLV<RawTag> implements Decodable; empty buffer → EOF → None
+        use crate::{RawTag, TTLV};
+        let mut dec = TtlvDecoder::new(&[]);
+        let v: Option<TTLV<RawTag>> = Decodable::decode(&mut dec).unwrap();
+        assert!(v.is_none());
+    }
+
+    // -- Vec<T> TagDecodable --
+
+    #[test]
+    fn test_vec_tag_decodable_empty() {
+        let bytes = encode_integer(0x420002, 1); // wrong tag
+        let mut dec = TtlvDecoder::new(&bytes);
+        let v: Vec<i32> = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v, vec![]);
+    }
+
+    #[test]
+    fn test_vec_tag_decodable_multiple() {
+        let mut enc = TtlvEncoder::new();
+        enc.write_integer(0x420001u32, 1).unwrap();
+        enc.write_integer(0x420001u32, 2).unwrap();
+        enc.write_integer(0x420001u32, 3).unwrap();
+        let mut dec = TtlvDecoder::new(enc.bytes());
+        let v: Vec<i32> = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v, vec![1, 2, 3]);
+    }
+
+    // -- Box<T> Decodable / TagDecodable --
+
+    #[test]
+    fn test_box_tag_decodable() {
+        let bytes = encode_integer(0x420001, 7);
+        let mut dec = TtlvDecoder::new(&bytes);
+        let v: Box<i32> = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(*v, 7);
+    }
+
+    // -- Primitive integer TagDecodable impls --
+
+    #[test]
+    fn test_i8_tag_decodable() {
+        let bytes = encode_integer(0x420001, 127);
+        let mut dec = TtlvDecoder::new(&bytes);
+        let v: i8 = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v, 127);
+    }
+
+    #[test]
+    fn test_i16_tag_decodable() {
+        let bytes = encode_integer(0x420001, 1000);
+        let mut dec = TtlvDecoder::new(&bytes);
+        let v: i16 = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v, 1000);
+    }
+
+    #[test]
+    fn test_u16_tag_decodable() {
+        let bytes = encode_integer(0x420001, 65535);
+        let mut dec = TtlvDecoder::new(&bytes);
+        let v: u16 = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v, 65535);
+    }
+
+    #[test]
+    fn test_u32_tag_decodable_via_long() {
+        let bytes = encode_long(0x420001, 4294967295);
+        let mut dec = TtlvDecoder::new(&bytes);
+        let v: u32 = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v, 4294967295u32);
+    }
+
+    // -- time::Duration TagDecodable --
+
+    #[test]
+    fn test_duration_tag_decodable() {
+        let bytes = encode_interval(0x420001, 3600);
+        let mut dec = TtlvDecoder::new(&bytes);
+        let v: time::Duration = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v, time::Duration::from_secs(3600));
+    }
+
+    // -- chrono TagDecodable impls --
+
+    #[cfg(feature = "chrono")]
+    #[test]
+    fn test_chrono_datetime_utc_tag_decodable() {
+        let ts = 1205495800i64;
+        let bytes = encode_datetime(0x420001, ts);
+        let mut dec = TtlvDecoder::new(&bytes);
+        let v: chrono::DateTime<chrono::Utc> = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v.timestamp(), ts);
+    }
+
+    #[cfg(feature = "chrono")]
+    #[test]
+    fn test_chrono_datetime_utc_out_of_range() {
+        let bytes = encode_datetime(0x420001, i64::MAX);
+        let mut dec = TtlvDecoder::new(&bytes);
+        let err = <chrono::DateTime<chrono::Utc> as TagDecodable>::decode(0x420001u32, &mut dec)
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::ValueOutOfBound));
+    }
+
+    #[cfg(feature = "chrono")]
+    #[test]
+    fn test_chrono_datetime_local_tag_decodable() {
+        let ts = 1205495800i64;
+        let bytes = encode_datetime(0x420001, ts);
+        let mut dec = TtlvDecoder::new(&bytes);
+        let v: chrono::DateTime<chrono::Local> =
+            TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v.timestamp(), ts);
+    }
+
+    #[cfg(feature = "chrono")]
+    #[test]
+    fn test_chrono_datetime_fixed_offset_tag_decodable() {
+        let ts = 1205495800i64;
+        let bytes = encode_datetime(0x420001, ts);
+        let mut dec = TtlvDecoder::new(&bytes);
+        let v: chrono::DateTime<chrono::FixedOffset> =
+            TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v.timestamp(), ts);
+    }
+
+    #[cfg(feature = "chrono")]
+    #[test]
+    fn test_chrono_duration_tag_decodable() {
+        let bytes = encode_interval(0x420001, 120);
+        let mut dec = TtlvDecoder::new(&bytes);
+        let v: chrono::Duration = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v.num_seconds(), 120);
+    }
+
+    #[cfg(feature = "chrono")]
+    #[test]
+    fn test_chrono_naive_datetime_tag_decodable() {
+        let ts = 1205495800i64;
+        let bytes = encode_datetime(0x420001, ts);
+        let mut dec = TtlvDecoder::new(&bytes);
+        let v: chrono::NaiveDateTime = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v.and_utc().timestamp(), ts);
+    }
+
+    // -- BigInteger TagDecodable --
+
+    #[test]
+    fn test_biginteger_tag_decodable() {
+        let mut enc = TtlvEncoder::new();
+        // write_bigint zero-extends to an 8-byte multiple; [0x01, 0x02] → 8 bytes on wire
+        enc.write_bigint(0x420001u32, [0x01, 0x02]).unwrap();
+        let mut dec = TtlvDecoder::new(enc.bytes());
+        let v: crate::BigInteger = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(&*v, &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02]);
+    }
+
+    // -- bool TagDecodable --
+
+    #[test]
+    fn test_bool_tag_decodable() {
+        let mut enc = TtlvEncoder::new();
+        enc.write_bool(0x420001u32, true).unwrap();
+        let mut dec = TtlvDecoder::new(enc.bytes());
+        let v: bool = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert!(v);
+    }
+
+    // -- String TagDecodable --
+
+    #[test]
+    fn test_string_tag_decodable() {
+        let mut enc = TtlvEncoder::new();
+        enc.write_string(0x420001u32, "hello").unwrap();
+        let mut dec = TtlvDecoder::new(enc.bytes());
+        let v: String = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v, "hello");
+    }
+
+    // -- Vec<u8> TagDecodable (bytes) --
+
+    #[test]
+    fn test_bytes_tag_decodable() {
+        let mut enc = TtlvEncoder::new();
+        enc.write_bytes(0x420001u32, [0xAB, 0xCD]).unwrap();
+        let mut dec = TtlvDecoder::new(enc.bytes());
+        let v: Vec<u8> = TagDecodable::decode(0x420001u32, &mut dec).unwrap();
+        assert_eq!(v, vec![0xAB, 0xCD]);
+    }
+}

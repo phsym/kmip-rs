@@ -306,6 +306,171 @@ mod tests {
     }
 
     #[test]
+    fn test_integer_hex_value() {
+        let input = r#"<TestTag type="Integer" value="0x0000000C"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        assert_eq!(12, dec.read_integer("TestTag").unwrap());
+    }
+
+    #[test]
+    fn test_long_integer() {
+        let input = r#"<MyTag type="LongInteger" value="1234567890123"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        assert_eq!(1234567890123i64, dec.read_long("MyTag").unwrap());
+    }
+
+    #[test]
+    fn test_long_integer_hex() {
+        let input = r#"<MyTag type="LongInteger" value="0x000000012A05F200"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        assert_eq!(5000000000i64, dec.read_long("MyTag").unwrap());
+    }
+
+    #[test]
+    fn test_bigint() {
+        let input = r#"<MyTag type="BigInteger" value="0102030405060708"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        assert_eq!(
+            vec![1, 2, 3, 4, 5, 6, 7, 8],
+            dec.read_bigint("MyTag").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_enum_hex() {
+        let input = r#"<MyTag type="Enumeration" value="0x00000001"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        let v = dec.read_enum("MyTag").unwrap();
+        assert_eq!(v, RawTag::Num(1));
+    }
+
+    #[test]
+    fn test_enum_decimal() {
+        let input = r#"<MyTag type="Enumeration" value="42"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        let v = dec.read_enum("MyTag").unwrap();
+        assert_eq!(v, RawTag::Num(42));
+    }
+
+    #[test]
+    fn test_enum_named() {
+        let input = r#"<MyTag type="Enumeration" value="Active"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        let v = dec.read_enum("MyTag").unwrap();
+        assert_eq!(v, RawTag::Str("Active".into()));
+    }
+
+    #[test]
+    fn test_boolean_true() {
+        let input = r#"<MyTag type="Boolean" value="true"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        assert!(dec.read_bool("MyTag").unwrap());
+    }
+
+    #[test]
+    fn test_boolean_false() {
+        let input = r#"<MyTag type="Boolean" value="false"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        assert!(!dec.read_bool("MyTag").unwrap());
+    }
+
+    #[test]
+    fn test_text_string() {
+        let input = r#"<MyTag type="TextString" value="Hello World"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        assert_eq!("Hello World", dec.read_string("MyTag").unwrap());
+    }
+
+    #[test]
+    fn test_byte_string() {
+        let input = r#"<MyTag type="ByteString" value="DEADBEEF"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        assert_eq!(
+            vec![0xDE, 0xAD, 0xBE, 0xEF],
+            dec.read_bytes("MyTag").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_datetime() {
+        // 2008-03-14T11:56:40+00:00 = unix 1205495800
+        let input = r#"<MyTag type="DateTime" value="2008-03-14T11:56:40+00:00"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        assert_eq!(1205495800i64, dec.read_datetime("MyTag").unwrap());
+    }
+
+    #[test]
+    fn test_interval_decimal() {
+        let input = r#"<MyTag type="Interval" value="3600"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        assert_eq!(3600u32, dec.read_interval("MyTag").unwrap());
+    }
+
+    #[test]
+    fn test_interval_hex() {
+        let input = r#"<MyTag type="Interval" value="0x00000E10"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        assert_eq!(3600u32, dec.read_interval("MyTag").unwrap());
+    }
+
+    #[test]
+    fn test_bitmask_named() {
+        let input = r#"<MyTag type="Integer" value="4"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        let v: i32 = dec.read_bitmask("MyTag").unwrap();
+        assert_eq!(4, v);
+    }
+
+    #[test]
+    fn test_bitmask_hex_value() {
+        let input = r#"<MyTag type="Integer" value="0x00000004"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        let v: i32 = dec.read_bitmask("MyTag").unwrap();
+        assert_eq!(4, v);
+    }
+
+    #[test]
+    fn test_unexpected_tag_error() {
+        let input = r#"<WrongTag type="Integer" value="1"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        let err = dec.read_integer("ExpectedTag").unwrap_err();
+        assert!(matches!(err, Error::UnexpectedTag { .. }));
+    }
+
+    #[test]
+    fn test_unexpected_type_error() {
+        let input = r#"<MyTag type="Boolean" value="true"/>"#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        let err = dec.read_integer("MyTag").unwrap_err();
+        assert!(matches!(err, Error::UnexpectedType { .. }));
+    }
+
+    #[test]
+    fn test_eof_on_empty_input() {
+        let input = r#""#;
+        let mut dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        let err = dec.read_integer("MyTag").unwrap_err();
+        assert!(matches!(err, Error::EOF));
+    }
+
+    #[test]
+    fn test_numeric_tag_via_0x_prefix() {
+        // Tag element with 0x prefix should be parsed as RawTag::Num
+        let input = r#"<TTLV type="Integer" tag="0x420001" value="7"/>"#;
+        let dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        let tag = dec.tag().unwrap();
+        assert_eq!(tag, RawTag::Num(0x420001));
+    }
+
+    #[test]
+    fn test_get_type_defaults_to_structure_when_no_type_attr() {
+        // When no 'type' attribute is present, get_type() should return Structure
+        let input = r#"<TTLV tag="0x420001"></TTLV>"#;
+        let dec = XmlDecoder::new(input.as_bytes()).unwrap();
+        assert_eq!(Type::Structure, dec.get_type().unwrap());
+    }
+
+    #[test]
     fn test_struct() {
         let input = r#"<TTLV type="Structure" tag="0x420011"/>
 <TTLV type="Structure" tag="0x420011"></TTLV>
