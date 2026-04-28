@@ -7,12 +7,13 @@ Proc-macro crate for deriving TTLV serialization/deserialization traits.
 
 This crate provides derive macros that plug into the traits defined in the
 [`ttlv`](https://docs.rs/ttlv) crate. You normally pull them in via the
-`ttlv` crate's `derive` feature (enabled by default) rather than depending
-on `ttlv-derive` directly:
+`ttlv` crate's `derive` feature rather than depending on `ttlv-derive`
+directly. The feature is opt-in (the `ttlv` crate ships with an empty
+default feature set), so enable it explicitly:
 
 ```toml
 [dependencies]
-ttlv = "*"
+ttlv = { version = "*", features = ["derive"] }
 ```
 
 Then bring the derives into scope:

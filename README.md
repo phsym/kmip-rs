@@ -113,7 +113,10 @@ mutually-exclusive Cargo features. Each backend exposes its own builder method:
 | `interop-boring`      | no      | Cryptographic interop using BoringSSL.                                        |
 
 The `ttlv` crate has its own feature flags (`xml`, `text`, `derive`, `chrono`,
-`serde`, `arbitrary`, `bitflags`) — see [`ttlv/Cargo.toml`](ttlv/Cargo.toml).
+`serde`, `arbitrary`, `bitflags`), all opt-in (empty default set) — see
+[`ttlv/README.md`](ttlv/README.md#cargo-features). When using `kmip` you
+don't need to set them: `kmip` already enables the ttlv features it depends
+on.
 
 ## Minimum supported Rust version
 

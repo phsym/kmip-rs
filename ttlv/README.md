@@ -65,12 +65,21 @@ enc.write_struct(0x420020u32, |s| {
 
 ## Cargo features
 
+All features are opt-in — the default set is empty, so consumers pull in
+only the encoders, derives, and integrations they actually use. Enable
+what you need via `features = [...]`:
+
+```toml
+[dependencies]
+ttlv = { version = "*", features = ["derive", "xml", "chrono"] }
+```
+
 | Feature     | Default | Effect                                                     |
 | ----------- | ------- | ---------------------------------------------------------- |
-| `derive`    | yes     | Re-exports [`Encodable`], [`Decodable`], [`Enum`] derives. |
-| `xml`       | yes     | Enables [`XmlEncoder`] / [`XmlDecoder`].                   |
-| `text`      | yes     | Enables [`TextEncoder`].                                   |
-| `chrono`    | yes     | `TagEncodable`/`TagDecodable` impls for `chrono` types.    |
-| `bitflags`  | yes     | [`Bitmask`] integration with the `bitflags` crate.         |
+| `derive`    | no      | Re-exports [`Encodable`], [`Decodable`], [`Enum`] derives. |
+| `xml`       | no      | Enables [`XmlEncoder`] / [`XmlDecoder`] (implies `chrono`).|
+| `text`      | no      | Enables [`TextEncoder`] (implies `chrono`).                |
+| `chrono`    | no      | `TagEncodable`/`TagDecodable` impls for `chrono` types.    |
+| `bitflags`  | no      | [`Bitmask`] integration with the `bitflags` crate.         |
 | `serde`     | no      | Derives `serde::Serialize` on TTLV value types.            |
 | `arbitrary` | no      | Derives `arbitrary::Arbitrary` for fuzzing.                |

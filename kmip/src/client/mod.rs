@@ -17,7 +17,7 @@ use std::{
     vec::IntoIter,
 };
 
-use ttlv::{Decodable, Decoder, Encodable, XmlDecoder, XmlEncoder};
+use ttlv::{Decodable, Encodable, XmlEncoder};
 
 mod batch;
 pub use batch::*;
@@ -366,21 +366,12 @@ impl Middleware for DebugMiddleware {
         println!("Request:\n{xml_req}");
         let now = Instant::now();
         let response = next.run(req)?;
-        // let response = client.roundtrip_ttlv::<ResponseMessage>(&msg).unwrap();
-        // let response = client
-        //     .roundtrip_ttlv::<TTLV<MaybeKnownTag<Tags>>>(&msg)
-        //     .unwrap();
 
         let elapsed = now.elapsed().as_millis();
 
         let xml_resp = XmlEncoder::encode_to_string(&response)?;
         println!("\nResponse in {elapsed}ms:\n{xml_resp}\n");
         // println!("\nresponse in {elapsed}ms:\n{response:#?}");
-
-        let mut xml_dec = XmlDecoder::new(xml_resp.as_bytes()).unwrap();
-        let tt = xml_dec.decode().unwrap();
-        // println!("\n{tt:#?}");
-        assert_eq!(response, tt);
         Ok(response)
     }
 }

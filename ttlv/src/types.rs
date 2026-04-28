@@ -290,7 +290,7 @@ mod tests {
             (Value::Interval(0), Type::Interval),
         ];
         for (val, expected) in cases {
-            assert_eq!(val.get_type(), expected, "{:?}", val);
+            assert_eq!(val.get_type(), expected, "{val:?}");
         }
     }
 
