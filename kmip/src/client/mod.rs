@@ -257,13 +257,25 @@ impl Client {
         }
     }
 
+    /// Validates that the `batch_count` field in a response header matches the
+    /// actual number of batch items in the message, as required by the KMIP spec.
+    #[inline]
+    fn validate_batch_count(resp: &ResponseMessage) -> Result<()> {
+        let expected = resp.header.batch_count;
+        let got = resp.batch_item.len();
+        if expected < 0 || (expected as usize) != got {
+            return Err(Error::BatchCountMismatch { expected, got });
+        }
+        Ok(())
+    }
+
     pub fn roundtrip(&mut self, msg: &RequestMessage) -> Result<ResponseMessage> {
         let resp = Next {
             idx: 0,
             client: self,
         }
         .run(msg)?;
-        validate_batch_count(&resp)?;
+        Self::validate_batch_count(&resp)?;
         Ok(resp)
     }
 
@@ -324,18 +336,6 @@ impl Iterator for ResponseBatchIter {
         let next = self.0.next()?;
         Some(next.success().map_err(Into::into))
     }
-}
-
-/// Validates that the `batch_count` field in a response header matches the
-/// actual number of batch items in the message, as required by the KMIP spec.
-#[inline]
-fn validate_batch_count(resp: &ResponseMessage) -> Result<()> {
-    let expected = resp.header.batch_count;
-    let got = resp.batch_item.len();
-    if expected < 0 || (expected as usize) != got {
-        return Err(Error::BatchCountMismatch { expected, got });
-    }
-    Ok(())
 }
 
 pub trait Middleware: Send + Sync {
@@ -512,19 +512,19 @@ mod tests {
     #[test]
     fn validate_batch_count_matches() {
         let resp = make_response(2, 2);
-        assert!(validate_batch_count(&resp).is_ok());
+        assert!(Client::validate_batch_count(&resp).is_ok());
     }
 
     #[test]
     fn validate_batch_count_zero_empty() {
         let resp = make_response(0, 0);
-        assert!(validate_batch_count(&resp).is_ok());
+        assert!(Client::validate_batch_count(&resp).is_ok());
     }
 
     #[test]
     fn validate_batch_count_header_too_large() {
         let resp = make_response(3, 1);
-        match validate_batch_count(&resp) {
+        match Client::validate_batch_count(&resp) {
             Err(Error::BatchCountMismatch {
                 expected: 3,
                 got: 1,
@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn validate_batch_count_header_too_small() {
         let resp = make_response(1, 4);
-        match validate_batch_count(&resp) {
+        match Client::validate_batch_count(&resp) {
             Err(Error::BatchCountMismatch {
                 expected: 1,
                 got: 4,
@@ -548,7 +548,7 @@ mod tests {
     #[test]
     fn validate_batch_count_negative_header() {
         let resp = make_response(-1, 0);
-        match validate_batch_count(&resp) {
+        match Client::validate_batch_count(&resp) {
             Err(Error::BatchCountMismatch {
                 expected: -1,
                 got: 0,
