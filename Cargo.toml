@@ -4,6 +4,7 @@ resolver = "3"
 members = ["kmip", "ttlv", "ttlv-derive"]
 
 [workspace.package]
+readme = "README.md"
 publish = false
 repository = "https://github.com/phsym/kmip-rs"
 rust-version = "1.88.0"
