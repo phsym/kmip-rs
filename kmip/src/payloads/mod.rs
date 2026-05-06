@@ -35,7 +35,7 @@ macro_rules! unique_identifier_request_payload {
     ($name:ident) => {
         #[cfg_attr(feature = "arbitrary", derive(::arbitrary::Arbitrary))]
         #[cfg_attr(feature = "serde", derive(::serde::Serialize))]
-        #[derive(Debug, Clone, PartialEq, ::ttlv::Encodable, ::ttlv::Decodable)]
+        #[derive(Default, Debug, Clone, PartialEq, ::ttlv::Encodable, ::ttlv::Decodable)]
         #[ttlv(tag = $crate::Tags::RequestPayload)]
         pub struct $name {
             #[ttlv(tag = $crate::Tags::UniqueIdentifier)]
