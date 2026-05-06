@@ -282,22 +282,36 @@ impl_attributes!(
     NeverExtractable(NeverExtractable) => "Never Extractable",
 );
 
-pub trait AttributesExt<'a> {
-    fn get_by_name(&'a self, name: AttributeName) -> impl Iterator<Item = &'a Attribute>;
-    fn get_by_type<T: AttributeType>(&'a self) -> impl Iterator<Item = (Option<i32>, &'a T)>
+pub trait AttributesExt {
+    fn iter_by_name(&self, name: AttributeName) -> impl Iterator<Item = &Attribute>;
+
+    fn iter_typed<T: AttributeType>(&self) -> impl Iterator<Item = (Option<i32>, &T)>
     where
         AttributeValue: TryAsRef<T>,
     {
-        self.get_by_name(T::NAME)
+        self.iter_by_name(T::NAME)
             .flat_map(|a| a.value.try_as_ref().map(|v| (a.index, v)))
+    }
+
+    fn find_by_name(&self, name: AttributeName, index: i32) -> Option<&AttributeValue> {
+        self.iter_by_name(name)
+            .find(|a| a.index.unwrap_or_default() == index)
+            .map(|a| &a.value)
+    }
+
+    fn find<T: AttributeType>(&self, index: i32) -> Option<&T>
+    where
+        AttributeValue: TryAsRef<T>,
+    {
+        self.find_by_name(T::NAME, index)?.try_as_ref()
     }
 }
 
-impl<'a, T> AttributesExt<'a> for T
+impl<T> AttributesExt for T
 where
-    &'a T: IntoIterator<Item = &'a Attribute> + 'a,
+    for<'a> &'a T: IntoIterator<Item = &'a Attribute>,
 {
-    fn get_by_name(&'a self, name: AttributeName) -> impl Iterator<Item = &'a Attribute> {
+    fn iter_by_name(&self, name: AttributeName) -> impl Iterator<Item = &Attribute> {
         self.into_iter().filter(move |a| a.name == name.as_str())
     }
 }
