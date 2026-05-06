@@ -303,6 +303,15 @@ impl CryptographicParameters {
         }
     }
 
+    pub fn aes_ecb(padding: Option<PaddingMethod>) -> Self {
+        Self {
+            cryptographic_algorithm: Some(CryptographicAlgorithm::AES),
+            block_cipher_mode: Some(BlockCipherMode::ECB),
+            padding_method: padding,
+            ..Default::default()
+        }
+    }
+
     fn rsa_oaep(hash: HashingAlgorithm) -> Self {
         Self {
             cryptographic_algorithm: Some(CryptographicAlgorithm::RSA),
@@ -324,6 +333,99 @@ impl CryptographicParameters {
 
     pub fn rsa_oaep_sha512() -> Self {
         Self::rsa_oaep(HashingAlgorithm::SHA512)
+    }
+
+    pub fn rsa_pss(hash: HashingAlgorithm, mgf: MaskGenerator, mgf_hash: HashingAlgorithm) -> Self {
+        Self {
+            cryptographic_algorithm: Some(CryptographicAlgorithm::RSA),
+            padding_method: Some(PaddingMethod::PSS),
+            hashing_algorithm: Some(hash),
+            mask_generator: Some(mgf),
+            mask_generator_hashing_algorithm: Some(mgf_hash),
+            digital_signature_algorithm: Some(DigitalSignatureAlgorithm::RsaSsaPss),
+            ..Default::default()
+        }
+    }
+
+    pub fn rsa_pss_sha256() -> Self {
+        Self::rsa_pss(
+            HashingAlgorithm::SHA256,
+            MaskGenerator::MGF1,
+            HashingAlgorithm::SHA256,
+        )
+    }
+
+    pub fn rsa_pss_sha384() -> Self {
+        Self::rsa_pss(
+            HashingAlgorithm::SHA384,
+            MaskGenerator::MGF1,
+            HashingAlgorithm::SHA384,
+        )
+    }
+
+    pub fn rsa_pss_sha512() -> Self {
+        Self::rsa_pss(
+            HashingAlgorithm::SHA512,
+            MaskGenerator::MGF1,
+            HashingAlgorithm::SHA512,
+        )
+    }
+
+    pub fn rsa_pkcs_sha256() -> Self {
+        Self {
+            cryptographic_algorithm: Some(CryptographicAlgorithm::RSA),
+            padding_method: Some(PaddingMethod::PKCS1V1_5),
+            hashing_algorithm: Some(HashingAlgorithm::SHA256),
+            digital_signature_algorithm: Some(DigitalSignatureAlgorithm::SHA256WithRSAEncryption),
+            ..Default::default()
+        }
+    }
+
+    pub fn rsa_pkcs_sha384() -> Self {
+        Self {
+            cryptographic_algorithm: Some(CryptographicAlgorithm::RSA),
+            padding_method: Some(PaddingMethod::PKCS1V1_5),
+            hashing_algorithm: Some(HashingAlgorithm::SHA384),
+            digital_signature_algorithm: Some(DigitalSignatureAlgorithm::SHA384WithRSAEncryption),
+            ..Default::default()
+        }
+    }
+
+    pub fn rsa_pkcs_sha512() -> Self {
+        Self {
+            cryptographic_algorithm: Some(CryptographicAlgorithm::RSA),
+            padding_method: Some(PaddingMethod::PKCS1V1_5),
+            hashing_algorithm: Some(HashingAlgorithm::SHA512),
+            digital_signature_algorithm: Some(DigitalSignatureAlgorithm::SHA512WithRSAEncryption),
+            ..Default::default()
+        }
+    }
+
+    pub fn ecdsa_sha256() -> Self {
+        Self {
+            cryptographic_algorithm: Some(CryptographicAlgorithm::EC),
+            digital_signature_algorithm: Some(DigitalSignatureAlgorithm::ECDSAWithSHA256),
+            hashing_algorithm: Some(HashingAlgorithm::SHA256),
+            ..Default::default()
+        }
+    }
+
+    pub fn ecdsa_sha384() -> Self {
+        Self {
+            cryptographic_algorithm: Some(CryptographicAlgorithm::EC),
+            digital_signature_algorithm: Some(DigitalSignatureAlgorithm::ECDSAWithSHA384),
+            hashing_algorithm: Some(HashingAlgorithm::SHA384),
+            ..Default::default()
+        }
+    }
+
+    pub fn ecdsa_sha512() -> Self {
+        Self {
+            cryptographic_algorithm: Some(CryptographicAlgorithm::EC),
+            digital_signature_algorithm: Some(DigitalSignatureAlgorithm::ECDSAWithSHA512),
+            hashing_algorithm: Some(HashingAlgorithm::SHA512),
+            ..Default::default()
+        }
     }
 }
 
