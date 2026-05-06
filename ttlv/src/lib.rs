@@ -99,6 +99,12 @@ impl DerefMut for BigInteger {
     }
 }
 
+impl AsRef<[u8]> for BigInteger {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 /// Convenience methods on the [`Extensions`] map carried by encoders and
 /// decoders. Extensions let callers thread context (for example the
 /// negotiated protocol version) through encode/decode without changing
