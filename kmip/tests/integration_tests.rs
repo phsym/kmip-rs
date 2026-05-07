@@ -72,7 +72,7 @@ mod tests {
         msg.header.batch_error_continuation_option =
             Some(kmip::enums::BatchErrorContinuationOption::Continue);
 
-        client.roundtrip(&msg).unwrap();
+        client.roundtrip(msg).unwrap();
     }
 
     #[test]
@@ -144,7 +144,7 @@ mod tests {
                 }]),
             ),
         );
-        let resp = client.roundtrip(&msg).unwrap();
+        let resp = client.roundtrip(msg).unwrap();
         assert_eq!(resp.batch_item.len(), 1);
         let bi = &resp.batch_item[0];
         assert_eq!(bi.result_status, ResultStatus::OperationFailed);
@@ -492,7 +492,7 @@ mod tests {
             ],
         )
         .unwrap();
-        client.roundtrip(&msg).unwrap();
+        client.roundtrip(msg).unwrap();
     }
 
     #[test]

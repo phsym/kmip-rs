@@ -23,7 +23,7 @@ mod tests {
         let unstructured = arbitrary::Unstructured::new(&data);
         let msg = RequestMessage::arbitrary_take_rest(unstructured).unwrap();
 
-        client.roundtrip(&msg).unwrap();
+        client.roundtrip(msg).unwrap();
     }
 
     #[test]
@@ -37,7 +37,7 @@ mod tests {
         let pl = RequestPayload::arbitrary_take_rest(unstructured).unwrap();
         let msg = RequestMessage::new(ProtocolVersion::V1_0, pl);
 
-        client.roundtrip(&msg).unwrap();
+        client.roundtrip(msg).unwrap();
     }
 
     #[test]
@@ -59,6 +59,6 @@ mod tests {
             }, // Arbitrary::arbitrary_take_rest(unstructured).unwrap(),
         );
 
-        client.roundtrip(&msg).unwrap();
+        client.roundtrip(msg).unwrap();
     }
 }

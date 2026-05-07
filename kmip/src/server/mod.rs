@@ -246,9 +246,9 @@ impl<H: RequestHandler, T: Transport> Chain for ClientHandler<H, T> {
 
     fn final_handler(
         &mut self,
-        req: &RequestMessage,
+        req: RequestMessage,
     ) -> std::result::Result<ResponseMessage, Self::Error> {
-        Ok(self.hdl.handle(req.clone()))
+        Ok(self.hdl.handle(req))
     }
 }
 
@@ -265,7 +265,7 @@ impl<H: RequestHandler, T: Transport> ClientHandler<H, T> {
             idx: 0,
             chain: self,
         }
-        .run(&req)?;
+        .run(req)?;
         Ok(resp)
     }
 

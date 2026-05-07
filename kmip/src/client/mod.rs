@@ -203,7 +203,7 @@ impl Client {
         if let Some(v) = &self.version {
             return Ok(*v);
         }
-        let resp = self.roundtrip(&RequestMessage::new(
+        let resp = self.roundtrip(RequestMessage::new(
             ProtocolVersion::V1_1,
             DiscoverVersionsRequestPayload {
                 protocol_version: if self.supported_versions.is_empty() {
@@ -268,7 +268,7 @@ impl Client {
         Ok(())
     }
 
-    pub fn roundtrip(&mut self, msg: &RequestMessage) -> Result<ResponseMessage> {
+    pub fn roundtrip(&mut self, msg: RequestMessage) -> Result<ResponseMessage> {
         let resp = Next {
             idx: 0,
             chain: self,
@@ -280,7 +280,7 @@ impl Client {
 
     pub fn request<R: Request>(&mut self, pl: R) -> Result<R::Response> {
         let msg = RequestMessage::new(self.version()?, pl);
-        let resp = self.roundtrip(&msg)?;
+        let resp = self.roundtrip(msg)?;
         resp.batch_item
             .into_iter()
             .next()
@@ -302,7 +302,7 @@ impl Client {
         let mut msg = RequestMessage::new_batched(self.version()?, items)?;
         msg.header.batch_error_continuation_option = cont;
 
-        let resp = self.roundtrip(&msg)?;
+        let resp = self.roundtrip(msg)?;
         Ok(ResponseBatchIter(resp.batch_item.into_iter()))
     }
 
@@ -343,8 +343,8 @@ impl Chain for Client {
         self.middlewares.get(idx).cloned()
     }
 
-    fn final_handler(&mut self, req: &RequestMessage) -> Result<ResponseMessage> {
-        self.roundtrip_ttlv(req)
+    fn final_handler(&mut self, req: RequestMessage) -> Result<ResponseMessage> {
+        self.roundtrip_ttlv(&req)
     }
 }
 

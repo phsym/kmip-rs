@@ -5,7 +5,7 @@ use ttlv::XmlEncoder;
 use crate::{RequestMessage, ResponseMessage, types::ProtocolVersion};
 
 pub trait Middleware<E>: Send + Sync {
-    fn call(&self, next: Next<E>, req: &RequestMessage) -> std::result::Result<ResponseMessage, E>;
+    fn call(&self, next: Next<E>, req: RequestMessage) -> std::result::Result<ResponseMessage, E>;
 }
 
 pub(crate) trait Chain {
@@ -13,7 +13,7 @@ pub(crate) trait Chain {
     fn get_middleware(&self, idx: usize) -> Option<Arc<dyn Middleware<Self::Error>>>;
     fn final_handler(
         &mut self,
-        req: &RequestMessage,
+        req: RequestMessage,
     ) -> std::result::Result<ResponseMessage, Self::Error>;
 }
 
@@ -23,7 +23,7 @@ pub struct Next<'a, E> {
 }
 
 impl<'a, E> Next<'a, E> {
-    pub fn run(mut self, req: &RequestMessage) -> std::result::Result<ResponseMessage, E> {
+    pub fn run(mut self, req: RequestMessage) -> std::result::Result<ResponseMessage, E> {
         if let Some(m) = self.chain.get_middleware(self.idx) {
             self.idx += 1;
             return m.call(self, req);
@@ -35,9 +35,9 @@ impl<'a, E> Next<'a, E> {
 pub struct DebugMiddleware;
 
 impl<E> Middleware<E> for DebugMiddleware {
-    fn call(&self, next: Next<E>, req: &RequestMessage) -> std::result::Result<ResponseMessage, E> {
+    fn call(&self, next: Next<E>, req: RequestMessage) -> std::result::Result<ResponseMessage, E> {
         let xml_req =
-            XmlEncoder::encode_to_string(req).unwrap_or("<failed to encode to XML>".into());
+            XmlEncoder::encode_to_string(&req).unwrap_or("<failed to encode to XML>".into());
         println!("Request:\n{xml_req}");
         let now = Instant::now();
         let response = next.run(req)?;
@@ -58,15 +58,18 @@ where
     T: Into<String>,
     F: Fn() -> T + Send + Sync,
 {
-    fn call(&self, next: Next<E>, req: &RequestMessage) -> std::result::Result<ResponseMessage, E> {
+    fn call(
+        &self,
+        next: Next<E>,
+        mut req: RequestMessage,
+    ) -> std::result::Result<ResponseMessage, E> {
         if req.header.client_correlation_value.is_some()
             || req.header.protocol_version < ProtocolVersion::V1_4
         {
             return next.run(req);
         }
-        let mut req = req.clone();
         req.header.client_correlation_value = Some(self.0().into());
-        next.run(&req)
+        next.run(req)
     }
 }
 
