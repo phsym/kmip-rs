@@ -6,6 +6,7 @@ pub mod client;
 pub mod enums;
 mod errors;
 pub mod interop;
+pub mod middlewares;
 pub mod objects;
 pub mod payloads;
 pub mod server;

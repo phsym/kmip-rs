@@ -1,6 +1,7 @@
 use crate::{
     Error, ProtocolError, RequestMessage, ResponseBatchItem, ResponseMessage, Result,
     enums::{BatchErrorContinuationOption, ResultReason},
+    middlewares::{Chain, Middleware, Next},
     payloads::{
         DiscoverVersionsRequestPayload, DiscoverVersionsResponsePayload, Request, RequestPayload,
         ResponsePayload,
@@ -13,11 +14,11 @@ use std::{
     net::TcpStream,
     path::Path,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
     vec::IntoIter,
 };
 
-use ttlv::{Decodable, Encodable, XmlEncoder};
+use ttlv::{Decodable, Encodable};
 
 mod batch;
 pub use batch::*;
@@ -80,45 +81,41 @@ impl ClientBuilder {
         Self::default()
     }
 
-    pub fn add_root_certificate_file(&mut self, path: impl AsRef<Path>) -> io::Result<&mut Self> {
+    pub fn add_root_certificate_file(self, path: impl AsRef<Path>) -> io::Result<Self> {
         Ok(self.add_root_certificate(fs::read(path)?))
     }
 
-    pub fn identity_file(
-        &mut self,
-        cert: impl AsRef<Path>,
-        key: impl AsRef<Path>,
-    ) -> io::Result<&mut Self> {
+    pub fn identity_file(self, cert: impl AsRef<Path>, key: impl AsRef<Path>) -> io::Result<Self> {
         Ok(self.identity(fs::read(cert)?, fs::read(key)?))
     }
 
-    pub fn add_root_certificate(&mut self, pem: Vec<u8>) -> &mut Self {
+    pub fn add_root_certificate(mut self, pem: Vec<u8>) -> Self {
         self.root_certs.push(pem);
         self
     }
 
-    pub fn identity(&mut self, cert_pem: Vec<u8>, key_pem: Vec<u8>) -> &mut Self {
+    pub fn identity(mut self, cert_pem: Vec<u8>, key_pem: Vec<u8>) -> Self {
         self.identity = Some((cert_pem, key_pem));
         self
     }
 
     /// Sets the read timeout applied to the underlying `TcpStream` before the
     /// TLS handshake. `None` disables the timeout (reads block indefinitely).
-    pub fn read_timeout(&mut self, timeout: Option<Duration>) -> &mut Self {
+    pub fn read_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.read_timeout = timeout;
         self
     }
 
     /// Sets the write timeout applied to the underlying `TcpStream` before the
     /// TLS handshake. `None` disables the timeout (writes block indefinitely).
-    pub fn write_timeout(&mut self, timeout: Option<Duration>) -> &mut Self {
+    pub fn write_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.write_timeout = timeout;
         self
     }
 
     /// Enables or disables `TCP_NODELAY` (Nagle's algorithm) on the underlying
     /// socket. Enabled by default to minimize request/response latency.
-    pub fn tcp_nodelay(&mut self, nodelay: bool) -> &mut Self {
+    pub fn tcp_nodelay(mut self, nodelay: bool) -> Self {
         self.tcp_nodelay = nodelay;
         self
     }
@@ -163,7 +160,7 @@ pub struct Client {
     supported_versions: Vec<ProtocolVersion>,
     version: Option<ProtocolVersion>,
     conn: ttlv::Stream<Box<dyn Transport>>,
-    middlewares: Vec<Arc<dyn Middleware>>,
+    middlewares: Vec<Arc<dyn Middleware<crate::Error>>>,
 }
 
 impl Client {
@@ -181,17 +178,19 @@ impl Client {
             middlewares: Vec::new(),
         })
     }
-
-    pub fn with_middleware<M: Middleware + 'static>(mut self, middleware: M) -> Self {
+    #[must_use]
+    pub fn with_middleware(mut self, middleware: impl Middleware<crate::Error> + 'static) -> Self {
         self.middlewares.push(Arc::new(middleware));
         self
     }
 
+    #[must_use]
     pub fn with_version(mut self, version: ProtocolVersion) -> Self {
         self.version = Some(version);
         self
     }
 
+    #[must_use]
     pub fn with_supported_versions(mut self, versions: &[ProtocolVersion]) -> Self {
         self.supported_versions.clear();
         self.supported_versions.extend_from_slice(versions);
@@ -272,7 +271,7 @@ impl Client {
     pub fn roundtrip(&mut self, msg: &RequestMessage) -> Result<ResponseMessage> {
         let resp = Next {
             idx: 0,
-            client: self,
+            chain: self,
         }
         .run(msg)?;
         Self::validate_batch_count(&resp)?;
@@ -338,77 +337,14 @@ impl Iterator for ResponseBatchIter {
     }
 }
 
-pub trait Middleware: Send + Sync {
-    fn call(&self, next: Next, req: &RequestMessage) -> Result<ResponseMessage>;
-}
-
-pub struct Next<'a> {
-    idx: usize,
-    client: &'a mut Client,
-}
-
-impl Next<'_> {
-    fn run(mut self, req: &RequestMessage) -> Result<ResponseMessage> {
-        if let Some(m) = self.client.middlewares.get(self.idx).cloned() {
-            self.idx += 1;
-            return m.call(self, req);
-        }
-        self.client.roundtrip_ttlv(req)
+impl Chain for Client {
+    type Error = crate::Error;
+    fn get_middleware(&self, idx: usize) -> Option<Arc<dyn Middleware<Self::Error>>> {
+        self.middlewares.get(idx).cloned()
     }
-}
 
-pub struct DebugMiddleware;
-
-impl Middleware for DebugMiddleware {
-    fn call(&self, next: Next, req: &RequestMessage) -> Result<ResponseMessage> {
-        let xml_req = XmlEncoder::encode_to_string(req)?;
-        // println!("request: {msg:#?}");
-        println!("Request:\n{xml_req}");
-        let now = Instant::now();
-        let response = next.run(req)?;
-
-        let elapsed = now.elapsed().as_millis();
-
-        let xml_resp = XmlEncoder::encode_to_string(&response)?;
-        println!("\nResponse in {elapsed}ms:\n{xml_resp}\n");
-        // println!("\nresponse in {elapsed}ms:\n{response:#?}");
-        Ok(response)
-    }
-}
-
-pub struct CorrelationValueMiddleware<F>(F);
-
-impl<T, F> Middleware for CorrelationValueMiddleware<F>
-where
-    T: Into<String>,
-    F: Fn() -> T + Send + Sync,
-{
-    fn call(&self, next: Next, req: &RequestMessage) -> Result<ResponseMessage> {
-        if req.header.client_correlation_value.is_some()
-            || req.header.protocol_version < ProtocolVersion::V1_4
-        {
-            return next.run(req);
-        }
-        let mut req = req.clone();
-        req.header.client_correlation_value = Some(self.0().into());
-        next.run(&req)
-    }
-}
-
-impl<T, F> CorrelationValueMiddleware<F>
-where
-    T: Into<String>,
-    F: Fn() -> T + Send + Sync,
-{
-    pub fn new(f: F) -> Self {
-        Self(f)
-    }
-}
-
-#[cfg(feature = "uuid")]
-impl CorrelationValueMiddleware<fn() -> uuid::Uuid> {
-    pub fn uuid() -> Self {
-        Self::new(uuid::Uuid::new_v4)
+    fn final_handler(&mut self, req: &RequestMessage) -> Result<ResponseMessage> {
+        self.roundtrip_ttlv(req)
     }
 }
 
@@ -427,8 +363,7 @@ mod tests {
 
     #[test]
     fn test_client_builder_custom_timeouts() {
-        let mut builder = ClientBuilder::new();
-        builder
+        let builder = ClientBuilder::new()
             .read_timeout(Some(Duration::from_secs(10)))
             .write_timeout(Some(Duration::from_secs(60)))
             .tcp_nodelay(false);
@@ -440,8 +375,7 @@ mod tests {
 
     #[test]
     fn test_client_builder_disable_timeouts() {
-        let mut builder = ClientBuilder::new();
-        builder.read_timeout(None).write_timeout(None);
+        let builder = ClientBuilder::new().read_timeout(None).write_timeout(None);
 
         assert_eq!(builder.read_timeout, None);
         assert_eq!(builder.write_timeout, None);

@@ -1,4 +1,5 @@
 use std::{
+    convert::Infallible,
     fs,
     io::{self, Read, Write},
     marker::PhantomData,
@@ -11,6 +12,7 @@ use std::{
 use crate::{
     ProtocolVersion, RequestMessage, ResponseBatchItem, ResponseHeader, ResponseMessage,
     ResultReason, ResultStatus,
+    middlewares::{Chain, Middleware, Next},
 };
 
 mod router;
@@ -165,6 +167,7 @@ pub(crate) fn configure_stream(
 pub struct Server<A: Acceptor, H: RequestHandler> {
     acceptor: A,
     handler: Arc<H>,
+    middlewares: Arc<Vec<Arc<dyn Middleware<Infallible>>>>,
 }
 
 impl<A: Acceptor + 'static, H: RequestHandler + 'static> Server<A, H> {
@@ -172,7 +175,14 @@ impl<A: Acceptor + 'static, H: RequestHandler + 'static> Server<A, H> {
         Ok(Self {
             acceptor,
             handler: Arc::new(handler),
+            middlewares: Arc::new(Vec::new()),
         })
+    }
+
+    #[must_use]
+    pub fn with_middleware(mut self, middleware: impl Middleware<Infallible> + 'static) -> Self {
+        Arc::make_mut(&mut self.middlewares).push(Arc::new(middleware));
+        self
     }
 
     pub fn run(&self) -> crate::Result<()> {
@@ -196,30 +206,74 @@ impl<A: Acceptor + 'static, H: RequestHandler + 'static> Server<A, H> {
             };
             debug!(client.ip = %addr, "new connection");
             let hdl = self.handler.clone();
+            let middlewares = Arc::clone(&self.middlewares);
             std::thread::Builder::new()
                 .name(format!("client[{addr}]"))
-                .spawn(move || Self::handle_connection(hdl, conn))
+                .spawn(move || Self::handle_connection(hdl, middlewares, conn))
                 .unwrap();
         }
     }
 
-    fn handle_connection(handler: Arc<H>, stream: A::Transport) {
+    fn handle_connection(
+        handler: Arc<H>,
+        middlewares: Arc<Vec<Arc<dyn Middleware<Infallible>>>>,
+        stream: A::Transport,
+    ) {
         let span = error_span!("session", client.ip = %stream.remote_address().unwrap());
-        let mut stream = ttlv::Stream::new(stream);
+        let stream = ttlv::Stream::new(stream);
         let mut _sp = span.enter();
+        let client = ClientHandler {
+            hdl: handler,
+            stream,
+            middlewares,
+        };
+
+        client.run();
+    }
+}
+
+struct ClientHandler<H: RequestHandler, T: Transport> {
+    hdl: Arc<H>,
+    stream: ttlv::Stream<T>,
+    middlewares: Arc<Vec<Arc<dyn Middleware<Infallible>>>>,
+}
+
+impl<H: RequestHandler, T: Transport> Chain for ClientHandler<H, T> {
+    type Error = Infallible;
+    fn get_middleware(&self, idx: usize) -> Option<Arc<dyn Middleware<Self::Error>>> {
+        self.middlewares.get(idx).cloned()
+    }
+
+    fn final_handler(
+        &mut self,
+        req: &RequestMessage,
+    ) -> std::result::Result<ResponseMessage, Self::Error> {
+        Ok(self.hdl.handle(req.clone()))
+    }
+}
+
+impl<H: RequestHandler, T: Transport> ClientHandler<H, T> {
+    fn process_next(&mut self) -> ttlv::Result<ResponseMessage> {
+        let req = self.stream.receive::<RequestMessage>()?;
+        let _span = error_span!("roundtrip", kmip.version = %req.header.protocol_version, req.id=field::Empty)
+            .entered();
+        if let Some(ccv) = &req.header.client_correlation_value {
+            _span.record("req.id", ccv);
+        }
+        trace!(?req, "recv KMIP request");
+        let resp = Next {
+            idx: 0,
+            chain: self,
+        }
+        .run(&req)?;
+        Ok(resp)
+    }
+
+    fn run(mut self) {
         loop {
-            let _span;
             //TODO: Catch panics
-            let resp = match stream.receive::<RequestMessage>() {
-                Ok(req) => {
-                    _span = error_span!("roundtrip", kmip.version = %req.header.protocol_version, req.id=field::Empty)
-                        .entered();
-                    if let Some(ccv) = &req.header.client_correlation_value {
-                        _span.record("req.id", ccv);
-                    }
-                    trace!(?req, "recv KMIP request");
-                    handler.handle(req)
-                }
+            let resp = match self.process_next() {
+                Ok(resp) => resp,
                 Err(ttlv::Error::Io(e)) => {
                     warn!("fatal recv error: {e}");
                     return;
@@ -250,7 +304,7 @@ impl<A: Acceptor + 'static, H: RequestHandler + 'static> Server<A, H> {
                 }
             };
             trace!(?resp, "write KMIP response");
-            if let Err(e) = stream.send(&resp) {
+            if let Err(e) = self.stream.send(&resp) {
                 warn!("failed to write response: {e}");
                 return;
             }
