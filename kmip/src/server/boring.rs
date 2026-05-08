@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use openssl::{
+use boring::{
     pkey::PKey,
     ssl::{SslAcceptor, SslMethod, SslStream, SslVerifyMode},
     x509::X509,
@@ -17,7 +17,7 @@ impl Transport for SslStream<TcpStream> {
     }
 }
 
-pub struct OpenSslAcceptor {
+pub struct BoringAcceptor {
     list: TcpListener,
     cfg: SslAcceptor,
     read_timeout: Option<Duration>,
@@ -25,7 +25,7 @@ pub struct OpenSslAcceptor {
     tcp_nodelay: bool,
 }
 
-impl OpenSslAcceptor {
+impl BoringAcceptor {
     pub fn new(
         cfg: SslAcceptor,
         a: impl ToSocketAddrs,
@@ -43,7 +43,7 @@ impl OpenSslAcceptor {
     }
 }
 
-impl Acceptor for OpenSslAcceptor {
+impl Acceptor for BoringAcceptor {
     type Transport = SslStream<TcpStream>;
 
     fn accept(&self) -> crate::Result<Self::Transport> {
@@ -61,8 +61,8 @@ impl Acceptor for OpenSslAcceptor {
 }
 
 impl AcceptorBuilder<Ready> {
-    pub fn listen_openssl(&self, addr: impl ToSocketAddrs) -> crate::Result<OpenSslAcceptor> {
-        let mut acc = SslAcceptor::mozilla_intermediate(SslMethod::tls_server())?;
+    pub fn listen_boring(&self, addr: impl ToSocketAddrs) -> crate::Result<BoringAcceptor> {
+        let mut acc = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
 
         for root in &self.root_certs {
             let certs = X509::stack_from_pem(root)?;
@@ -86,7 +86,7 @@ impl AcceptorBuilder<Ready> {
         }
         acc.set_private_key(PKey::private_key_from_pem(key)?.as_ref())?;
 
-        Ok(OpenSslAcceptor::new(
+        Ok(BoringAcceptor::new(
             acc.build(),
             addr,
             self.read_timeout,

@@ -29,6 +29,11 @@ mod openssl;
 #[cfg(feature = "tls-openssl")]
 pub use openssl::*;
 
+#[cfg(feature = "tls-boring")]
+mod boring;
+#[cfg(feature = "tls-boring")]
+pub use boring::*;
+
 use tracing::{debug, error_span, field, trace, warn};
 
 pub trait RequestHandler: Send + Sync {
@@ -151,7 +156,11 @@ impl<T> AcceptorBuilder<T> {
     // TODO: Fine tune TLS cipher suites when/if possible
 }
 
-#[cfg(any(feature = "tls-rustls", feature = "tls-openssl"))]
+#[cfg(any(
+    feature = "tls-rustls",
+    feature = "tls-openssl",
+    feature = "tls-boring"
+))]
 pub(crate) fn configure_stream(
     stream: &TcpStream,
     read_timeout: Option<Duration>,

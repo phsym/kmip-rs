@@ -7,7 +7,7 @@ use std::{
 
 use boring::{
     pkey::PKey,
-    ssl::{HandshakeError, SslConnector, SslMethod, SslStream, SslVerifyMode},
+    ssl::{SslConnector, SslMethod, SslStream, SslVerifyMode},
     x509::X509,
 };
 
@@ -94,12 +94,7 @@ impl Connector for BoringSslConnector {
             self.write_timeout,
             self.tcp_nodelay,
         )?;
-        let mut tls_stream = match self.inner.connect(&self.domain, sock) {
-            Ok(s) => s,
-            Err(HandshakeError::SetupFailure(e)) => return Err(e.into()),
-            Err(HandshakeError::Failure(e)) => return Err(e.into_error().into()),
-            Err(HandshakeError::WouldBlock(..)) => unreachable!(),
-        };
+        let mut tls_stream = self.inner.connect(&self.domain, sock)?;
         tls_stream.do_handshake()?;
         Ok(tls_stream)
     }

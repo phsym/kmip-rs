@@ -91,6 +91,16 @@ impl From<boring::ssl::Error> for Error {
     }
 }
 
+#[cfg(feature = "tls-boring")]
+impl<S> From<boring::ssl::HandshakeError<S>> for Error
+where
+    S: std::fmt::Debug + Send + Sync + 'static,
+{
+    fn from(value: boring::ssl::HandshakeError<S>) -> Self {
+        Self::TLS(value.into())
+    }
+}
+
 #[derive(Debug)]
 pub struct ProtocolError {
     pub status: ResultStatus,
