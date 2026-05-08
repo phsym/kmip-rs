@@ -139,7 +139,7 @@ pub(crate) fn configure_stream(
 pub trait Transport: Read + Write + Send {}
 impl<T> Transport for T where T: Read + Write + Send {}
 
-pub trait Connector: Send {
+pub trait Connector: Send + Sync {
     type Transport: Transport;
     fn connect(&self) -> Result<Self::Transport>;
 }
@@ -156,11 +156,11 @@ where
 }
 
 pub struct Client {
-    connector: Box<dyn Connector<Transport = Box<dyn Transport>>>,
+    connector: Arc<dyn Connector<Transport = Box<dyn Transport>>>,
     supported_versions: Vec<ProtocolVersion>,
     version: Option<ProtocolVersion>,
     conn: ttlv::Stream<Box<dyn Transport>>,
-    middlewares: Vec<Arc<dyn Middleware<crate::Error>>>,
+    middlewares: Arc<Vec<Arc<dyn Middleware<crate::Error>>>>,
 }
 
 impl Client {
@@ -169,18 +169,42 @@ impl Client {
     }
 
     pub fn new<C: Connector + 'static>(connector: C) -> Result<Self> {
-        let connector = Box::new(BoxedConnector(connector));
+        let connector = Arc::new(BoxedConnector(connector));
         Ok(Self {
             conn: ttlv::Stream::new(connector.connect()?),
             connector,
             supported_versions: DEFAULT_SUPPORTED_VERSIONS.to_vec(),
             version: None,
-            middlewares: Vec::new(),
+            middlewares: Arc::new(Vec::new()),
         })
     }
+
+    /// Returns a new `Client` that opens its own connection but reuses this
+    /// client's configuration.
+    ///
+    /// A fresh transport is established via [`Connector::connect`], which is
+    /// fallible and may block on TCP/TLS handshake. The connector, middleware
+    /// chain, and supported-version list are shared cheaply via `Arc`;
+    /// subsequent builder calls like [`Self::with_middleware`] on the clone
+    /// diverge via copy-on-write and do not affect the original.
+    ///
+    /// The negotiated protocol version is also carried over. Clones are
+    /// expected to talk to the same server as the source client — if the
+    /// connector resolves to a different host on reconnect, the cached
+    /// version may not match what that host actually supports.
+    pub fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            conn: ttlv::Stream::new(self.connector.connect()?),
+            connector: self.connector.clone(),
+            supported_versions: self.supported_versions.clone(),
+            version: self.version,
+            middlewares: self.middlewares.clone(),
+        })
+    }
+
     #[must_use]
     pub fn with_middleware(mut self, middleware: impl Middleware<crate::Error> + 'static) -> Self {
-        self.middlewares.push(Arc::new(middleware));
+        Arc::make_mut(&mut self.middlewares).push(Arc::new(middleware));
         self
     }
 
@@ -489,5 +513,55 @@ mod tests {
             }) => {}
             other => panic!("unexpected result: {other:?}"),
         }
+    }
+
+    struct LocalConnector(std::net::SocketAddr);
+    impl Connector for LocalConnector {
+        type Transport = TcpStream;
+        fn connect(&self) -> Result<Self::Transport> {
+            Ok(TcpStream::connect(self.0)?)
+        }
+    }
+
+    struct NoopMiddleware;
+    impl<E> Middleware<E> for NoopMiddleware {
+        fn call(
+            &self,
+            next: Next<E>,
+            req: RequestMessage,
+        ) -> std::result::Result<ResponseMessage, E> {
+            next.run(req)
+        }
+    }
+
+    #[test]
+    fn try_clone_middleware_diverges_via_cow() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let original = Client::new(LocalConnector(addr))
+            .unwrap()
+            .with_middleware(NoopMiddleware);
+
+        let clone = original
+            .try_clone()
+            .unwrap()
+            .with_middleware(NoopMiddleware);
+
+        assert_eq!(original.middlewares.len(), 1);
+        assert_eq!(clone.middlewares.len(), 2);
+    }
+
+    #[test]
+    fn try_clone_shares_middleware_when_unchanged() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let original = Client::new(LocalConnector(addr))
+            .unwrap()
+            .with_middleware(NoopMiddleware);
+        let clone = original.try_clone().unwrap();
+
+        assert!(Arc::ptr_eq(&original.middlewares, &clone.middlewares));
     }
 }
