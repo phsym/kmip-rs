@@ -283,22 +283,26 @@ pub struct CryptographicParameters {
 }
 
 impl CryptographicParameters {
-    pub fn aes_cbc_pkcs5() -> Self {
+    pub fn aes_cbc(padding: Option<PaddingMethod>) -> Self {
         Self {
             cryptographic_algorithm: Some(CryptographicAlgorithm::AES),
             block_cipher_mode: Some(BlockCipherMode::CBC),
-            padding_method: Some(PaddingMethod::PKCS5),
+            padding_method: padding,
             iv_length: Some(16),
             ..Default::default()
         }
     }
 
-    pub fn aes_gcm() -> Self {
+    pub fn aes_cbc_pkcs5() -> Self {
+        Self::aes_cbc(Some(PaddingMethod::PKCS5))
+    }
+
+    pub fn aes_gcm(iv_length: Option<i32>, tag_length: Option<i32>) -> Self {
         Self {
             cryptographic_algorithm: Some(CryptographicAlgorithm::AES),
             block_cipher_mode: Some(BlockCipherMode::GCM),
-            iv_length: Some(12),
-            tag_length: Some(16),
+            iv_length: iv_length.or(Some(12)),
+            tag_length: tag_length.or(Some(16)),
             ..Default::default()
         }
     }
