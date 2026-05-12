@@ -39,7 +39,7 @@ serde = { version = "1", optional = true, features = ["derive"] }
 serde_with = { version = "3", optional = true, features = ["base64"] }
 cfg_eval = { version = "0.1", optional = true }
 
-quick-xml = { version = "0.39", optional = true }
+quick-xml = { version = "0.40", optional = true }
 data-encoding = { version = "2", optional = true }
 
 [dev-dependencies]
