@@ -227,12 +227,18 @@ impl Client {
         if let Some(v) = &self.version {
             return Ok(*v);
         }
+        tracing::debug!("Negotiating protocol version with server...");
         let resp = self.roundtrip(RequestMessage::new(
             ProtocolVersion::V1_1,
             DiscoverVersionsRequestPayload {
                 protocol_version: if self.supported_versions.is_empty() {
+                    tracing::trace!(
+                        "Client supported version list is empty, using default: {:?}",
+                        DEFAULT_SUPPORTED_VERSIONS
+                    );
                     DEFAULT_SUPPORTED_VERSIONS.to_vec()
                 } else {
+                    tracing::trace!("Client supported versions: {:?}", self.supported_versions);
                     self.supported_versions.clone()
                 },
             },
@@ -251,15 +257,18 @@ impl Client {
                 ..
             }) => {
                 // TODO: Check that default version is in the supported version list before using it
+                tracing::debug!(
+                    "DiscoverVersions operation not supported, falling back to default protocol version"
+                );
                 self.version = Some(ProtocolVersion::default());
                 return Ok(self.version.unwrap());
             }
             Err(other) => return Err(other.into()),
         };
-
+        tracing::trace!("Server supported versions: {:?}", pl.protocol_version);
         let version = pl.protocol_version.into_iter().next().unwrap_or_default();
         self.version = Some(version);
-        // println!("Negociated version: {}", version);
+        tracing::debug!("Negotiated protocol version: {}", version);
         Ok(version)
     }
 
@@ -269,7 +278,11 @@ impl Client {
         loop {
             match self.conn.roundtrip(msg) {
                 Err(ttlv::Error::Io(e)) if retry > 0 && e.kind() == ErrorKind::UnexpectedEof => {
-                    // println!("Error: {e:?}. Reconnecting");
+                    tracing::warn!("I/O error during request/response roundtrip: {e:?}");
+                    tracing::warn!(
+                        "Attempting to reconnect and retry the request ({retry} retries left)",
+                    );
+                    //FIXME: If connect fails, there's no retry as the error is returned immediately.
                     self.conn = ttlv::Stream::new(self.connector.connect()?);
                     retry -= 1;
                     continue;
