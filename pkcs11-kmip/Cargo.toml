@@ -1,0 +1,38 @@
+[package]
+name = "pkcs11-kmip"
+description = "PKCS 11 driver over KMIP"
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+edition.workspace = true
+version.workspace = true
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+kmip = { path = "../kmip" }
+
+cryptoki = "0.12"
+cryptoki-sys = "0.5"
+slab = "0.4"
+zeroize = "1"
+
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+lru = "0.18"
+parking_lot = "0.12"
+
+chrono = { version = "0.4", default-features = false, features = ["alloc", "std", "clock"] }
+
+macro_rules_attribute = "0.2"
+
+spki = "0.7"
+sec1 = "0.7"
+der = { version = "0.7", features = ["derive", "alloc"] }
+const-oid = { version = "0.9", features = ["db"] }
