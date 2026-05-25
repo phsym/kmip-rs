@@ -1,7 +1,10 @@
 use std::borrow::{BorrowMut, Cow};
 
 use data_encoding::HEXUPPER_PERMISSIVE;
-use quick_xml::events::{BytesEnd, BytesStart, Event};
+use quick_xml::{
+    XmlVersion,
+    events::{BytesEnd, BytesStart, Event},
+};
 use task_local_extensions::Extensions;
 
 use crate::{BitmaskUnit, Decoder, Error, Expected, RawTag, Result, Tag, Type};
@@ -79,7 +82,10 @@ impl<'a, E: BorrowMut<Extensions>> XmlDecoder<'a, E> {
         else {
             return Ok(None);
         };
-        Ok(Some(attr.decode_and_unescape_value(self.reader.decoder())?))
+        Ok(Some(attr.decoded_and_normalized_value(
+            XmlVersion::Implicit1_0,
+            self.reader.decoder(),
+        )?))
     }
 
     fn raw_tag(&'a self) -> Result<Cow<'a, str>> {
