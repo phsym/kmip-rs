@@ -260,8 +260,9 @@ impl Client {
                 tracing::debug!(
                     "DiscoverVersions operation not supported, falling back to default protocol version"
                 );
-                self.version = Some(ProtocolVersion::default());
-                return Ok(self.version.unwrap());
+                let version = ProtocolVersion::default();
+                self.version = Some(version);
+                return Ok(version);
             }
             Err(other) => return Err(other.into()),
         };
