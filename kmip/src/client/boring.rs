@@ -13,12 +13,17 @@ use boring::{
 
 use crate::{Error, Result};
 
-use super::{Client, ClientBuilder, Connector, configure_stream};
+use super::{
+    Client, ClientBuilder, ClusterConnector, Connector, DEFAULT_RETRY_TIMEOUT, configure_stream,
+    endpoint_domain,
+};
 
 pub type BoringSsl = SslStream<TcpStream>;
 
 impl ClientBuilder {
-    pub fn connect_boring(&self, addr: impl ToSocketAddrs, domain: &str) -> Result<Client> {
+    /// Builds the boring [`SslConnector`] from the builder's root certificates
+    /// and client identity. Shared by the single- and multi-endpoint connectors.
+    fn build_boring_config(&self) -> Result<SslConnector> {
         let mut bld = SslConnector::builder(SslMethod::tls())?;
 
         for root in &self.root_certs {
@@ -43,14 +48,50 @@ impl ClientBuilder {
         }
 
         bld.set_verify(SslVerifyMode::PEER);
+        Ok(bld.build())
+    }
+
+    pub fn connect_boring(&self, addr: impl ToSocketAddrs, domain: &str) -> Result<Client> {
         Client::new(BoringSslConnector::new(
-            bld.build(),
+            self.build_boring_config()?,
             addr,
             domain,
             self.read_timeout,
             self.write_timeout,
             self.tcp_nodelay,
         )?)
+    }
+
+    /// Connects to a pool of KMIP endpoints over boring with failover and
+    /// optional load balancing (see [`ClusterConnector`] /
+    /// [`ClientBuilder::cluster_mode`]).
+    ///
+    /// Each entry in `addrs` is a `host:port` address; its SNI / certificate
+    /// domain is derived from the host part, so endpoints may present different
+    /// certificates. All endpoints share one [`SslConnector`] (root CAs +
+    /// client identity from this builder). The per-endpoint cooldown is
+    /// [`ClientBuilder::retry_timeout`] (default [`DEFAULT_RETRY_TIMEOUT`]).
+    pub fn connect_cluster_boring(&self, addrs: &[String]) -> Result<Client> {
+        let cfg = self.build_boring_config()?;
+        let connectors = addrs
+            .iter()
+            .map(|addr| {
+                BoringSslConnector::new(
+                    cfg.clone(),
+                    addr.as_str(),
+                    endpoint_domain(addr),
+                    self.read_timeout,
+                    self.write_timeout,
+                    self.tcp_nodelay,
+                )
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        let cluster = ClusterConnector::with_mode(
+            connectors,
+            self.retry_timeout.unwrap_or(DEFAULT_RETRY_TIMEOUT),
+            self.cluster_mode,
+        )?;
+        Client::new(cluster)
     }
 }
 

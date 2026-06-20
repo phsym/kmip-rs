@@ -23,6 +23,9 @@ use ttlv::{Decodable, Encodable};
 mod batch;
 pub use batch::*;
 
+mod cluster;
+pub use cluster::*;
+
 pub mod exec;
 
 #[cfg(feature = "tls-rustls")]
@@ -62,6 +65,8 @@ pub struct ClientBuilder {
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     tcp_nodelay: bool,
+    retry_timeout: Option<Duration>,
+    cluster_mode: ClusterMode,
 }
 
 impl Default for ClientBuilder {
@@ -72,6 +77,8 @@ impl Default for ClientBuilder {
             read_timeout: DEFAULT_SOCKET_TIMEOUT,
             write_timeout: DEFAULT_SOCKET_TIMEOUT,
             tcp_nodelay: true,
+            retry_timeout: None,
+            cluster_mode: ClusterMode::default(),
         }
     }
 }
@@ -120,6 +127,25 @@ impl ClientBuilder {
         self
     }
 
+    /// Sets the per-endpoint cooldown window used by the cluster connectors
+    /// (the `connect_cluster_*` methods / [`ClusterConnector`]). After a failed
+    /// dial, an endpoint is skipped for this duration before being retried. Has
+    /// no effect on the single-endpoint connectors. Defaults to 5s when unset
+    /// ([`DEFAULT_RETRY_TIMEOUT`]).
+    pub fn retry_timeout(mut self, timeout: Duration) -> Self {
+        self.retry_timeout = Some(timeout);
+        self
+    }
+
+    /// Selects how a cluster connector (the `connect_cluster_*` methods /
+    /// [`ClusterConnector`]) picks endpoints: [`ClusterMode::Failover`]
+    /// (default) or [`ClusterMode::RoundRobin`] load balancing. Has no effect on
+    /// the single-endpoint connectors.
+    pub fn cluster_mode(mut self, mode: ClusterMode) -> Self {
+        self.cluster_mode = mode;
+        self
+    }
+
     // TODO: Add KMIP authentication
     // TODO: Fine tune TLS cipher suites when/if possible
 }
@@ -134,6 +160,20 @@ pub(crate) fn configure_stream(
     stream.set_write_timeout(write_timeout)?;
     stream.set_nodelay(tcp_nodelay)?;
     Ok(())
+}
+
+/// Derives the SNI / certificate domain for a cluster endpoint from its
+/// `host:port` address: the host part, i.e. everything before the first `:`.
+///
+/// TLS-backend agnostic. Exposed so a [`ClusterConnector`] can be built by hand
+/// over any backend's per-endpoint connector, matching the domain derivation
+/// used by the built-in `connect_cluster_*` helpers.
+///
+/// Assumes a hostname-style address (the KMIP cluster case); a bare IPv6
+/// literal such as `[::1]:5696` is not handled specially and SNI is not
+/// meaningful for an IP endpoint anyway.
+pub fn endpoint_domain(addr: &str) -> &str {
+    addr.split(':').next().unwrap_or(addr)
 }
 
 pub trait Transport: Read + Write + Send {}
@@ -397,6 +437,33 @@ mod tests {
         assert_eq!(builder.read_timeout, Some(Duration::from_secs(30)));
         assert_eq!(builder.write_timeout, Some(Duration::from_secs(30)));
         assert!(builder.tcp_nodelay);
+        assert_eq!(builder.retry_timeout, None);
+        assert_eq!(builder.cluster_mode, ClusterMode::Failover);
+    }
+
+    #[test]
+    fn test_client_builder_cluster_options() {
+        let builder = ClientBuilder::new()
+            .retry_timeout(Duration::from_secs(2))
+            .cluster_mode(ClusterMode::RoundRobin);
+
+        assert_eq!(builder.retry_timeout, Some(Duration::from_secs(2)));
+        assert_eq!(builder.cluster_mode, ClusterMode::RoundRobin);
+    }
+
+    #[test]
+    fn endpoint_domain_strips_the_port() {
+        assert_eq!(endpoint_domain("kms.example.com:5696"), "kms.example.com");
+    }
+
+    #[test]
+    fn endpoint_domain_without_port_is_the_whole_host() {
+        assert_eq!(endpoint_domain("kms.example.com"), "kms.example.com");
+    }
+
+    #[test]
+    fn endpoint_domain_handles_empty_input() {
+        assert_eq!(endpoint_domain(""), "");
     }
 
     #[test]
