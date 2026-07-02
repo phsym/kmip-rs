@@ -44,10 +44,10 @@ use kmip::{
     types::TemplateAttribute,
 };
 
-let mut client = ClientBuilder::new()
+let mut client = ClientBuilder::default()
     .add_root_certificate_file("ca.pem").unwrap()
     .identity_file("client.pem", "client.key").unwrap()
-    .connect_rustls("kmip.example.com:5696", "kmip.example.com").unwrap();
+    .connect("kmip.example.com:5696", "kmip.example.com").unwrap();
 
 let response = client.request(CreateRequestPayload {
     object_type: ObjectType::SymmetricKey,
@@ -68,10 +68,10 @@ The same operation written with the fluent helpers on `Client`:
 ```rust,no_run
 use kmip::{CryptographicUsageMask, client::ClientBuilder};
 
-let mut client = ClientBuilder::new()
+let mut client = ClientBuilder::default()
     .add_root_certificate_file("ca.pem").unwrap()
     .identity_file("client.pem", "client.key").unwrap()
-    .connect_rustls("kmip.example.com:5696", "kmip.example.com").unwrap();
+    .connect("kmip.example.com:5696", "kmip.example.com").unwrap();
 
 let response = client
     .create()
@@ -90,21 +90,41 @@ server's `Discover Versions` response.
 
 ## TLS backends
 
-The `kmip` crate compiles against several TLS implementations, selected via
-mutually-exclusive Cargo features. Each backend exposes its own builder method:
+The `kmip` crate compiles against several TLS implementations. All backends
+share a single `ClientBuilder::connect(addr, domain)` method; the backend is
+chosen by a `TlsBackend` implementation rather than a per-backend method.
 
-| Feature       | Backend       | Builder method         | Notes                                                       |
-| ------------- | ------------- | ---------------------- | ----------------------------------------------------------- |
-| `tls-rustls`  | rustls        | `connect_rustls(...)`  | **Default.** Pure Rust, uses the platform trust store.      |
-| `tls-native`  | native-tls    | `connect_native(...)`  | Delegates to the OS (SChannel / SecureTransport / OpenSSL). |
-| `tls-openssl` | openssl crate | `connect_openssl(...)` | Requires a system OpenSSL.                                  |
-| `tls-boring`  | BoringSSL     | `connect_boring(...)`  | Useful when matching a BoringSSL-based server stack.        |
+| Feature       | Backend type       | Notes                                                       |
+| ------------- | ------------------ | ----------------------------------------------------------- |
+| `tls-rustls`  | `RustlsBackend`    | **Default.** Pure Rust, uses the platform trust store.      |
+| `tls-native`  | `NativeTlsBackend` | Delegates to the OS (SChannel / SecureTransport / OpenSSL). |
+| `tls-openssl` | `OpenSslBackend`   | Requires a system OpenSSL.                                  |
+| `tls-boring`  | `BoringBackend`    | Useful when matching a BoringSSL-based server stack.        |
+
+Pick a backend at runtime by passing its type to `ClientBuilder::new`:
+
+```rust,no_run
+use kmip::client::{ClientBuilder, RustlsBackend};
+
+let mut client = ClientBuilder::new(RustlsBackend)
+    .connect("kmip.example.com:5696", "kmip.example.com").unwrap();
+```
+
+The `default-tls-rustls` feature (on by default) selects rustls as the built-in
+default: it's what `ClientBuilder::default()` (used above) and `Client::builder()`
+construct. Both are only available when `default-tls-rustls` is enabled; with it
+disabled, use `ClientBuilder::new(backend)` to choose a backend explicitly.
+
+Multiple backends can be enabled at once and selected per-client via
+`ClientBuilder::new`, with one exception: `tls-boring` and `tls-openssl` cannot
+be enabled together (they export conflicting symbols).
 
 ## Optional features
 
 | Feature               | Default | Effect                                                                        |
 | --------------------- | ------- | ----------------------------------------------------------------------------- |
 | `tls-rustls`          | yes     | Enables the rustls client backend (see above).                                |
+| `default-tls-rustls`  | yes     | Makes rustls the built-in default (`ClientBuilder::default()` / `Client::builder()`). |
 | `uuid`                | yes     | Implements unique-identifier helpers using the `uuid` crate.                  |
 | `serde`               | no      | Derives `serde::Serialize` on protocol types for logging/inspection.          |
 | `arbitrary`           | no      | Derives `arbitrary::Arbitrary` for fuzzing.                                   |

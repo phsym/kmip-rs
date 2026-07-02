@@ -1,7 +1,7 @@
 use std::{
     io,
-    net::SocketAddr,
-    net::{TcpStream, ToSocketAddrs},
+    net::{SocketAddr, TcpStream},
+    sync::Arc,
     time::Duration,
 };
 
@@ -11,24 +11,34 @@ use boring::{
     x509::X509,
 };
 
-use crate::{Error, Result};
+use crate::{
+    Error, Result,
+    client::{TlsBackend, boxed_connector},
+};
 
-use super::{Client, ClientBuilder, Connector, configure_stream};
+use super::{ClientBuilder, Connector, configure_stream};
 
 pub type BoringSsl = SslStream<TcpStream>;
 
-impl ClientBuilder {
-    pub fn connect_boring(&self, addr: impl ToSocketAddrs, domain: &str) -> Result<Client> {
+pub struct BoringBackend;
+
+impl TlsBackend for BoringBackend {
+    fn create_connector(
+        &self,
+        builder: &ClientBuilder,
+        addr: Vec<SocketAddr>,
+        domain: &str,
+    ) -> Result<Arc<dyn Connector<Transport = Box<dyn super::Transport>>>> {
         let mut bld = SslConnector::builder(SslMethod::tls())?;
 
-        for root in &self.root_certs {
+        for root in &builder.root_certs {
             let certs = X509::stack_from_pem(root)?;
             for cert in certs {
                 bld.cert_store_mut().add_cert(cert)?;
             }
         }
 
-        if let Some((cert, key)) = &self.identity {
+        if let Some((cert, key)) = &builder.identity {
             let mut certs = X509::stack_from_pem(cert)?.into_iter();
             bld.set_certificate(
                 certs
@@ -43,14 +53,14 @@ impl ClientBuilder {
         }
 
         bld.set_verify(SslVerifyMode::PEER);
-        Client::new(BoringSslConnector::new(
+        Ok(boxed_connector(BoringSslConnector::new(
             bld.build(),
             addr,
             domain,
-            self.read_timeout,
-            self.write_timeout,
-            self.tcp_nodelay,
-        )?)
+            builder.read_timeout,
+            builder.write_timeout,
+            builder.tcp_nodelay,
+        )?))
     }
 }
 
@@ -66,7 +76,7 @@ pub struct BoringSslConnector {
 impl BoringSslConnector {
     pub fn new(
         cfg: SslConnector,
-        addr: impl ToSocketAddrs,
+        addr: Vec<SocketAddr>,
         domain: impl Into<String>,
         read_timeout: Option<Duration>,
         write_timeout: Option<Duration>,
@@ -75,7 +85,7 @@ impl BoringSslConnector {
         Ok(Self {
             inner: cfg,
             domain: domain.into(),
-            addr: addr.to_socket_addrs()?.collect(),
+            addr,
             read_timeout,
             write_timeout,
             tcp_nodelay,
