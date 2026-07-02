@@ -12,11 +12,13 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["uuid", "tls-rustls"]
+default = ["uuid", "default-tls-rustls"]
 tls-native = ["dep:native-tls"]
 tls-rustls = ["dep:rustls", "dep:rustls-platform-verifier"]
 tls-openssl = ["dep:openssl"]
 tls-boring = ["dep:boring"]
+
+default-tls-rustls = ["tls-rustls"]
 
 arbitrary = ["dep:arbitrary", "ttlv/arbitrary", "bitflags/arbitrary", "chrono/arbitrary"]
 serde = ["dep:serde", "dep:serde_with", "dep:cfg_eval", "bitflags/serde", "ttlv/serde", "chrono/serde"]
@@ -33,7 +35,10 @@ interop-p521 = ["dep:p521", "_interop-elliptic-curve"]
 
 uuid = ["dep:uuid"]
 
-_integration_tests = ["interop-rust-crypto"]
+# Integration tests use `ClientBuilder::default()` / `.connect(...)`, which
+# require the built-in rustls default; pull it in so the suite compiles even
+# with `--no-default-features`.
+_integration_tests = ["interop-rust-crypto", "default-tls-rustls"]
 
 [dependencies]
 ttlv = { version = "*", path = "../ttlv", features = ["chrono", "xml", "bitflags", "derive"] }

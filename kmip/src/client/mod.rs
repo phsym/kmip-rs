@@ -11,7 +11,7 @@ use crate::{
 use std::{
     fs,
     io::{self, ErrorKind, Read, Write},
-    net::TcpStream,
+    net::{SocketAddr, TcpStream, ToSocketAddrs},
     path::Path,
     sync::Arc,
     time::Duration,
@@ -55,6 +55,15 @@ const DEFAULT_SUPPORTED_VERSIONS: &[ProtocolVersion] = &[
 
 const DEFAULT_SOCKET_TIMEOUT: Option<Duration> = Some(Duration::from_secs(30));
 
+pub trait TlsBackend: 'static + Send + Sync {
+    fn create_connector(
+        &self,
+        builder: &ClientBuilder,
+        addr: Vec<SocketAddr>,
+        domain: &str,
+    ) -> Result<Arc<dyn Connector<Transport = Box<dyn Transport>>>>;
+}
+
 #[must_use = "builder must be used to create a Client"]
 pub struct ClientBuilder {
     root_certs: Vec<Vec<u8>>,
@@ -62,23 +71,26 @@ pub struct ClientBuilder {
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     tcp_nodelay: bool,
+    tls_backend: Box<dyn TlsBackend>,
 }
 
+#[cfg(feature = "default-tls-rustls")]
 impl Default for ClientBuilder {
     fn default() -> Self {
+        Self::new(rustls::RustlsBackend)
+    }
+}
+
+impl ClientBuilder {
+    pub fn new(tls: impl TlsBackend) -> Self {
         Self {
             root_certs: Vec::new(),
             identity: None,
             read_timeout: DEFAULT_SOCKET_TIMEOUT,
             write_timeout: DEFAULT_SOCKET_TIMEOUT,
             tcp_nodelay: true,
+            tls_backend: Box::new(tls),
         }
-    }
-}
-
-impl ClientBuilder {
-    pub fn new() -> Self {
-        Self::default()
     }
 
     pub fn add_root_certificate_file(self, path: impl AsRef<Path>) -> io::Result<Self> {
@@ -120,6 +132,12 @@ impl ClientBuilder {
         self
     }
 
+    pub fn connect(self, addr: impl ToSocketAddrs, domain: &str) -> Result<Client> {
+        let addr = addr.to_socket_addrs()?.collect();
+        let connector = self.tls_backend.create_connector(&self, addr, domain)?;
+        Client::new_arc(connector)
+    }
+
     // TODO: Add KMIP authentication
     // TODO: Fine tune TLS cipher suites when/if possible
 }
@@ -155,6 +173,17 @@ where
     }
 }
 
+/// Erases a concrete [`Connector`] into the boxed-transport form that
+/// [`Client`] stores internally.
+///
+/// [`TlsBackend`] implementations use this to build their return value from a
+/// backend-specific connector.
+pub fn boxed_connector<C: Connector + 'static>(
+    connector: C,
+) -> Arc<dyn Connector<Transport = Box<dyn Transport>>> {
+    Arc::new(BoxedConnector(connector))
+}
+
 pub struct Client {
     connector: Arc<dyn Connector<Transport = Box<dyn Transport>>>,
     supported_versions: Vec<ProtocolVersion>,
@@ -164,12 +193,16 @@ pub struct Client {
 }
 
 impl Client {
+    #[cfg(feature = "default-tls-rustls")]
     pub fn builder() -> ClientBuilder {
-        ClientBuilder::new()
+        ClientBuilder::default()
     }
 
     pub fn new<C: Connector + 'static>(connector: C) -> Result<Self> {
-        let connector = Arc::new(BoxedConnector(connector));
+        Self::new_arc(boxed_connector(connector))
+    }
+
+    fn new_arc(connector: Arc<dyn Connector<Transport = Box<dyn Transport>>>) -> Result<Self> {
         Ok(Self {
             conn: ttlv::Stream::new(connector.connect()?),
             connector,
@@ -391,17 +424,19 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
 
+    #[cfg(feature = "default-tls-rustls")]
     #[test]
     fn test_client_builder_defaults() {
-        let builder = ClientBuilder::new();
+        let builder = ClientBuilder::default();
         assert_eq!(builder.read_timeout, Some(Duration::from_secs(30)));
         assert_eq!(builder.write_timeout, Some(Duration::from_secs(30)));
         assert!(builder.tcp_nodelay);
     }
 
+    #[cfg(feature = "default-tls-rustls")]
     #[test]
     fn test_client_builder_custom_timeouts() {
-        let builder = ClientBuilder::new()
+        let builder = ClientBuilder::default()
             .read_timeout(Some(Duration::from_secs(10)))
             .write_timeout(Some(Duration::from_secs(60)))
             .tcp_nodelay(false);
@@ -411,9 +446,12 @@ mod tests {
         assert!(!builder.tcp_nodelay);
     }
 
+    #[cfg(feature = "default-tls-rustls")]
     #[test]
     fn test_client_builder_disable_timeouts() {
-        let builder = ClientBuilder::new().read_timeout(None).write_timeout(None);
+        let builder = ClientBuilder::default()
+            .read_timeout(None)
+            .write_timeout(None);
 
         assert_eq!(builder.read_timeout, None);
         assert_eq!(builder.write_timeout, None);

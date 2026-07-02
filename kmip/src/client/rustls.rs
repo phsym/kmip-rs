@@ -1,7 +1,7 @@
 use core::str;
 use std::{
     io,
-    net::{SocketAddr, TcpStream, ToSocketAddrs},
+    net::{SocketAddr, TcpStream},
     sync::Arc,
     time::Duration,
 };
@@ -15,9 +15,12 @@ use rustls::{
 };
 use rustls_platform_verifier::BuilderVerifierExt;
 
-use crate::{Error, Result};
+use crate::{
+    Error, Result,
+    client::{TlsBackend, boxed_connector},
+};
 
-use super::{Client, ClientBuilder, Connector, configure_stream};
+use super::{ClientBuilder, Connector, configure_stream};
 
 pub type Rustls = StreamOwned<ClientConnection, TcpStream>;
 
@@ -33,7 +36,7 @@ pub struct RustlsConnector {
 impl RustlsConnector {
     pub fn new(
         cfg: ClientConfig,
-        addr: impl ToSocketAddrs,
+        addr: Vec<SocketAddr>,
         domain: impl Into<String>,
         read_timeout: Option<Duration>,
         write_timeout: Option<Duration>,
@@ -42,7 +45,7 @@ impl RustlsConnector {
         Ok(Self {
             cfg: Arc::new(cfg),
             domain: domain.into(),
-            addr: addr.to_socket_addrs()?.collect(),
+            addr,
             read_timeout,
             write_timeout,
             tcp_nodelay,
@@ -75,11 +78,18 @@ impl Connector for RustlsConnector {
     }
 }
 
-impl ClientBuilder {
-    pub fn connect_rustls(&self, addr: impl ToSocketAddrs, domain: &str) -> Result<Client> {
-        let cfg = if !self.root_certs.is_empty() {
+pub struct RustlsBackend;
+
+impl TlsBackend for RustlsBackend {
+    fn create_connector(
+        &self,
+        builder: &ClientBuilder,
+        addr: Vec<SocketAddr>,
+        domain: &str,
+    ) -> Result<Arc<dyn Connector<Transport = Box<dyn super::Transport>>>> {
+        let cfg = if !builder.root_certs.is_empty() {
             let mut root_store = RootCertStore::empty();
-            for root in &self.root_certs {
+            for root in &builder.root_certs {
                 let ca = pem::SliceIter::new(root).collect::<std::result::Result<Vec<_>, _>>()?;
                 root_store.add_parsable_certificates(ca);
             }
@@ -90,7 +100,7 @@ impl ClientBuilder {
             ClientConfig::builder().with_platform_verifier()?
         };
 
-        let cfg = if let Some((cert, key)) = &self.identity {
+        let cfg = if let Some((cert, key)) = &builder.identity {
             let cert_chain =
                 pem::SliceIter::new(cert).collect::<std::result::Result<Vec<_>, _>>()?;
             let key_der = PrivateKeyDer::from_pem_slice(key)?;
@@ -98,13 +108,13 @@ impl ClientBuilder {
         } else {
             cfg.with_no_client_auth()
         };
-        Client::new(RustlsConnector::new(
+        Ok(boxed_connector(RustlsConnector::new(
             cfg,
             addr,
             domain,
-            self.read_timeout,
-            self.write_timeout,
-            self.tcp_nodelay,
-        )?)
+            builder.read_timeout,
+            builder.write_timeout,
+            builder.tcp_nodelay,
+        )?))
     }
 }

@@ -1,36 +1,47 @@
 use std::{
     io,
-    net::{SocketAddr, TcpStream, ToSocketAddrs},
+    net::{SocketAddr, TcpStream},
+    sync::Arc,
     time::Duration,
 };
 
 use native_tls::{Certificate, HandshakeError, Identity, Protocol, TlsConnector, TlsStream};
 
-use crate::Result;
+use crate::{
+    Result,
+    client::{TlsBackend, boxed_connector},
+};
 
-use super::{Client, ClientBuilder, Connector, configure_stream};
+use super::{ClientBuilder, Connector, configure_stream};
 
 pub type NativeTls = TlsStream<TcpStream>;
 
-impl ClientBuilder {
-    pub fn connect_native(&self, addr: impl ToSocketAddrs, domain: &str) -> Result<Client> {
+pub struct NativeTlsBackend;
+
+impl TlsBackend for NativeTlsBackend {
+    fn create_connector(
+        &self,
+        builder: &ClientBuilder,
+        addr: Vec<SocketAddr>,
+        domain: &str,
+    ) -> Result<Arc<dyn Connector<Transport = Box<dyn super::Transport>>>> {
         let mut bld = TlsConnector::builder();
-        for root in &self.root_certs {
+        for root in &builder.root_certs {
             bld.add_root_certificate(Certificate::from_pem(root)?);
         }
-        if let Some((cert, key)) = &self.identity {
+        if let Some((cert, key)) = &builder.identity {
             bld.identity(Identity::from_pkcs8(cert, key)?);
         }
         bld.min_protocol_version(Some(Protocol::Tlsv12));
 
-        Client::new(NativeTlsConnector::new(
+        Ok(boxed_connector(NativeTlsConnector::new(
             bld.build()?,
             addr,
             domain,
-            self.read_timeout,
-            self.write_timeout,
-            self.tcp_nodelay,
-        )?)
+            builder.read_timeout,
+            builder.write_timeout,
+            builder.tcp_nodelay,
+        )?))
     }
 }
 
@@ -46,7 +57,7 @@ pub struct NativeTlsConnector {
 impl NativeTlsConnector {
     pub fn new(
         cfg: TlsConnector,
-        addr: impl ToSocketAddrs,
+        addr: Vec<SocketAddr>,
         domain: impl Into<String>,
         read_timeout: Option<Duration>,
         write_timeout: Option<Duration>,
@@ -55,7 +66,7 @@ impl NativeTlsConnector {
         Ok(Self {
             inner: cfg,
             domain: domain.into(),
-            addr: addr.to_socket_addrs()?.collect(),
+            addr,
             read_timeout,
             write_timeout,
             tcp_nodelay,
