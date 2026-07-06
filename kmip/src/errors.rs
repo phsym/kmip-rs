@@ -54,12 +54,23 @@ impl From<native_tls::Error> for Error {
 }
 
 #[cfg(feature = "tls-native")]
-impl<S> From<native_tls::HandshakeError<S>> for Error
-where
-    S: std::fmt::Debug + Send + Sync + 'static,
-{
+impl<S> From<native_tls::HandshakeError<S>> for Error {
     fn from(value: native_tls::HandshakeError<S>) -> Self {
-        Self::TLS(value.into())
+        match value {
+            // Preserve the inner `native_tls::Error` instead of boxing the whole
+            // `HandshakeError`, so callers can still downcast the boxed TLS error
+            // to `native_tls::Error`.
+            native_tls::HandshakeError::Failure(e) => e.into(),
+            // A stalled handshake surfaces as `WouldBlock` when the socket's
+            // read/write timeout fires (the read returns EAGAIN, i.e.
+            // `io::ErrorKind::WouldBlock`). Drop the mid-handshake stream
+            // (freeing the socket) and surface that same io kind, matching how
+            // the rustls backend reports the identical condition.
+            native_tls::HandshakeError::WouldBlock(_) => Self::IO(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "TLS handshake would block",
+            )),
+        }
     }
 }
 
@@ -78,12 +89,22 @@ impl From<openssl::ssl::Error> for Error {
 }
 
 #[cfg(feature = "tls-openssl")]
-impl<S> From<openssl::ssl::HandshakeError<S>> for Error
-where
-    S: std::fmt::Debug + Send + Sync + 'static,
-{
+impl<S> From<openssl::ssl::HandshakeError<S>> for Error {
     fn from(value: openssl::ssl::HandshakeError<S>) -> Self {
-        Self::TLS(value.into())
+        match value {
+            openssl::ssl::HandshakeError::SetupFailure(e) => e.into(),
+            // `Failure` carries a `MidHandshakeSslStream` that owns the socket;
+            // take its inner error (dropping the stream) so the boxed TLS error
+            // stays downcastable to `openssl::ssl::Error` and the socket is freed.
+            openssl::ssl::HandshakeError::Failure(mid) => mid.into_error().into(),
+            // A stalled handshake surfaces as `WouldBlock` when the socket read
+            // hits its timeout (EAGAIN / `io::ErrorKind::WouldBlock`); drop the
+            // stream and surface that same io kind, matching the rustls backend.
+            openssl::ssl::HandshakeError::WouldBlock(_) => Self::IO(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "TLS handshake would block",
+            )),
+        }
     }
 }
 
@@ -102,12 +123,22 @@ impl From<boring::ssl::Error> for Error {
 }
 
 #[cfg(feature = "tls-boring")]
-impl<S> From<boring::ssl::HandshakeError<S>> for Error
-where
-    S: std::fmt::Debug + Send + Sync + 'static,
-{
+impl<S> From<boring::ssl::HandshakeError<S>> for Error {
     fn from(value: boring::ssl::HandshakeError<S>) -> Self {
-        Self::TLS(value.into())
+        match value {
+            boring::ssl::HandshakeError::SetupFailure(e) => e.into(),
+            // `Failure` carries a `MidHandshakeSslStream` that owns the socket;
+            // take its inner error (dropping the stream) so the boxed TLS error
+            // stays downcastable to `boring::ssl::Error` and the socket is freed.
+            boring::ssl::HandshakeError::Failure(mid) => mid.into_error().into(),
+            // A stalled handshake surfaces as `WouldBlock` when the socket read
+            // hits its timeout (EAGAIN / `io::ErrorKind::WouldBlock`); drop the
+            // stream and surface that same io kind, matching the rustls backend.
+            boring::ssl::HandshakeError::WouldBlock(_) => Self::IO(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "TLS handshake would block",
+            )),
+        }
     }
 }
 
