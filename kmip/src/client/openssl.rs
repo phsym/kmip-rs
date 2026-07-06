@@ -7,7 +7,7 @@ use std::{
 use openssl::{
     pkey::PKey,
     ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion},
-    x509::X509,
+    x509::{X509, store::X509StoreBuilder},
 };
 
 use crate::{Error, Result};
@@ -26,8 +26,16 @@ impl TlsBackend for OpenSslBackend {
         let mut bld = SslConnector::builder(SslMethod::tls_client())?;
         bld.set_min_proto_version(Some(SslVersion::TLS1_2))?;
 
+        if !builder.root_certs.is_empty() {
+            // If root CAs have been provided, disable system roots
+            bld.set_cert_store(X509StoreBuilder::new()?.build());
+        }
+
         for root in &builder.root_certs {
             let certs = X509::stack_from_pem(root)?;
+            if certs.is_empty() {
+                return Err(Error::TLS("No valid root certificates found".into()));
+            }
             for cert in certs {
                 bld.cert_store_mut().add_cert(cert)?;
             }

@@ -20,8 +20,18 @@ impl TlsBackend for NativeTlsBackend {
         domain: &str,
     ) -> Result<Arc<dyn Connector>> {
         let mut bld = TlsConnector::builder();
+        if !builder.root_certs.is_empty() {
+            // If root CAs have been provided, disable system roots
+            bld.disable_built_in_roots(true);
+        }
         for root in &builder.root_certs {
-            bld.add_root_certificate(Certificate::from_pem(root)?);
+            let certs = Certificate::stack_from_pem(root)?;
+            if certs.is_empty() {
+                return Err(crate::Error::TLS("No valid root certificates found".into()));
+            }
+            for cert in certs {
+                bld.add_root_certificate(cert);
+            }
         }
         if let Some((cert, key)) = &builder.identity {
             bld.identity(Identity::from_pkcs8(cert, key)?);

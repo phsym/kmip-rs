@@ -83,7 +83,10 @@ impl TlsBackend for RustlsBackend {
             let mut root_store = RootCertStore::empty();
             for root in &builder.root_certs {
                 let ca = pem::SliceIter::new(root).collect::<std::result::Result<Vec<_>, _>>()?;
-                root_store.add_parsable_certificates(ca);
+                let (added, _ignored) = root_store.add_parsable_certificates(ca);
+                if added == 0 {
+                    return Err(Error::TLS("No valid root certificates found".into()));
+                }
             }
             ClientConfig::builder().with_root_certificates(root_store)
         } else {
