@@ -43,7 +43,6 @@ pub trait RequestHandler: Send + Sync {
 pub trait Transport: Read + Write + Send {
     fn remote_address(&self) -> std::io::Result<std::net::SocketAddr>;
 }
-// impl<T> Transport for T where T: Read + Write + Send {}
 
 pub trait Acceptor: Send + Sync {
     type Transport: Transport;

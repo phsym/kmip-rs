@@ -53,6 +53,16 @@ impl From<native_tls::Error> for Error {
     }
 }
 
+#[cfg(feature = "tls-native")]
+impl<S> From<native_tls::HandshakeError<S>> for Error
+where
+    S: std::fmt::Debug + Send + Sync + 'static,
+{
+    fn from(value: native_tls::HandshakeError<S>) -> Self {
+        Self::TLS(value.into())
+    }
+}
+
 #[cfg(feature = "tls-openssl")]
 impl From<openssl::error::ErrorStack> for Error {
     fn from(value: openssl::error::ErrorStack) -> Self {

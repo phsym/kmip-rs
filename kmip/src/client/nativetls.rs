@@ -1,20 +1,14 @@
 use std::{
-    io,
     net::{SocketAddr, TcpStream},
     sync::Arc,
     time::Duration,
 };
 
-use native_tls::{Certificate, HandshakeError, Identity, Protocol, TlsConnector, TlsStream};
+use native_tls::{Certificate, Identity, Protocol, TlsConnector};
 
-use crate::{
-    Result,
-    client::{TlsBackend, boxed_connector},
-};
+use crate::Result;
 
-use super::{ClientBuilder, Connector, configure_stream};
-
-pub type NativeTls = TlsStream<TcpStream>;
+use super::{ClientBuilder, Connector, TlsBackend, Transport, configure_stream};
 
 pub struct NativeTlsBackend;
 
@@ -24,7 +18,7 @@ impl TlsBackend for NativeTlsBackend {
         builder: &ClientBuilder,
         addr: Vec<SocketAddr>,
         domain: &str,
-    ) -> Result<Arc<dyn Connector<Transport = Box<dyn super::Transport>>>> {
+    ) -> Result<Arc<dyn Connector>> {
         let mut bld = TlsConnector::builder();
         for root in &builder.root_certs {
             bld.add_root_certificate(Certificate::from_pem(root)?);
@@ -34,14 +28,14 @@ impl TlsBackend for NativeTlsBackend {
         }
         bld.min_protocol_version(Some(Protocol::Tlsv12));
 
-        Ok(boxed_connector(NativeTlsConnector::new(
+        Ok(Arc::new(NativeTlsConnector::new(
             bld.build()?,
             addr,
             domain,
             builder.read_timeout,
             builder.write_timeout,
             builder.tcp_nodelay,
-        )?))
+        )))
     }
 }
 
@@ -62,22 +56,20 @@ impl NativeTlsConnector {
         read_timeout: Option<Duration>,
         write_timeout: Option<Duration>,
         tcp_nodelay: bool,
-    ) -> io::Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             inner: cfg,
             domain: domain.into(),
             addr,
             read_timeout,
             write_timeout,
             tcp_nodelay,
-        })
+        }
     }
 }
 
 impl Connector for NativeTlsConnector {
-    type Transport = NativeTls;
-
-    fn connect(&self) -> Result<Self::Transport> {
+    fn connect(&self) -> Result<Box<dyn Transport>> {
         let sock = TcpStream::connect(&self.addr[..])?;
         configure_stream(
             &sock,
@@ -85,11 +77,7 @@ impl Connector for NativeTlsConnector {
             self.write_timeout,
             self.tcp_nodelay,
         )?;
-        let tls_stream = match self.inner.connect(&self.domain, sock) {
-            Ok(v) => v,
-            Err(HandshakeError::Failure(e)) => Err(e)?,
-            Err(HandshakeError::WouldBlock(..)) => unreachable!(),
-        };
-        Ok(tls_stream)
+        let tls_stream = self.inner.connect(&self.domain, sock)?;
+        Ok(Box::new(tls_stream))
     }
 }

@@ -1,6 +1,5 @@
 use core::str;
 use std::{
-    io,
     net::{SocketAddr, TcpStream},
     sync::Arc,
     time::Duration,
@@ -15,14 +14,9 @@ use rustls::{
 };
 use rustls_platform_verifier::BuilderVerifierExt;
 
-use crate::{
-    Error, Result,
-    client::{TlsBackend, boxed_connector},
-};
+use crate::{Error, Result};
 
-use super::{ClientBuilder, Connector, configure_stream};
-
-pub type Rustls = StreamOwned<ClientConnection, TcpStream>;
+use super::{ClientBuilder, Connector, TlsBackend, Transport, configure_stream};
 
 pub struct RustlsConnector {
     cfg: Arc<ClientConfig>,
@@ -41,22 +35,20 @@ impl RustlsConnector {
         read_timeout: Option<Duration>,
         write_timeout: Option<Duration>,
         tcp_nodelay: bool,
-    ) -> io::Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             cfg: Arc::new(cfg),
             domain: domain.into(),
             addr,
             read_timeout,
             write_timeout,
             tcp_nodelay,
-        })
+        }
     }
 }
 
 impl Connector for RustlsConnector {
-    type Transport = Rustls;
-
-    fn connect(&self) -> Result<Self::Transport> {
+    fn connect(&self) -> Result<Box<dyn Transport>> {
         let mut conn = ClientConnection::new(
             self.cfg.clone(),
             self.domain
@@ -74,7 +66,7 @@ impl Connector for RustlsConnector {
         // Drive the TLS handshake to completion right now
         conn.complete_io(&mut sock)?;
         let stream = StreamOwned::new(conn, sock);
-        Ok(stream)
+        Ok(Box::new(stream))
     }
 }
 
@@ -86,7 +78,7 @@ impl TlsBackend for RustlsBackend {
         builder: &ClientBuilder,
         addr: Vec<SocketAddr>,
         domain: &str,
-    ) -> Result<Arc<dyn Connector<Transport = Box<dyn super::Transport>>>> {
+    ) -> Result<Arc<dyn Connector>> {
         let cfg = if !builder.root_certs.is_empty() {
             let mut root_store = RootCertStore::empty();
             for root in &builder.root_certs {
@@ -108,13 +100,13 @@ impl TlsBackend for RustlsBackend {
         } else {
             cfg.with_no_client_auth()
         };
-        Ok(boxed_connector(RustlsConnector::new(
+        Ok(Arc::new(RustlsConnector::new(
             cfg,
             addr,
             domain,
             builder.read_timeout,
             builder.write_timeout,
             builder.tcp_nodelay,
-        )?))
+        )))
     }
 }

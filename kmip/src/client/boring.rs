@@ -1,5 +1,4 @@
 use std::{
-    io,
     net::{SocketAddr, TcpStream},
     sync::Arc,
     time::Duration,
@@ -7,18 +6,13 @@ use std::{
 
 use boring::{
     pkey::PKey,
-    ssl::{SslConnector, SslMethod, SslStream, SslVerifyMode},
+    ssl::{SslConnector, SslMethod, SslVerifyMode},
     x509::X509,
 };
 
-use crate::{
-    Error, Result,
-    client::{TlsBackend, boxed_connector},
-};
+use crate::{Error, Result};
 
-use super::{ClientBuilder, Connector, configure_stream};
-
-pub type BoringSsl = SslStream<TcpStream>;
+use super::{ClientBuilder, Connector, TlsBackend, Transport, configure_stream};
 
 pub struct BoringBackend;
 
@@ -28,7 +22,7 @@ impl TlsBackend for BoringBackend {
         builder: &ClientBuilder,
         addr: Vec<SocketAddr>,
         domain: &str,
-    ) -> Result<Arc<dyn Connector<Transport = Box<dyn super::Transport>>>> {
+    ) -> Result<Arc<dyn Connector>> {
         let mut bld = SslConnector::builder(SslMethod::tls())?;
 
         for root in &builder.root_certs {
@@ -53,14 +47,14 @@ impl TlsBackend for BoringBackend {
         }
 
         bld.set_verify(SslVerifyMode::PEER);
-        Ok(boxed_connector(BoringSslConnector::new(
+        Ok(Arc::new(BoringSslConnector::new(
             bld.build(),
             addr,
             domain,
             builder.read_timeout,
             builder.write_timeout,
             builder.tcp_nodelay,
-        )?))
+        )))
     }
 }
 
@@ -81,22 +75,20 @@ impl BoringSslConnector {
         read_timeout: Option<Duration>,
         write_timeout: Option<Duration>,
         tcp_nodelay: bool,
-    ) -> io::Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             inner: cfg,
             domain: domain.into(),
             addr,
             read_timeout,
             write_timeout,
             tcp_nodelay,
-        })
+        }
     }
 }
 
 impl Connector for BoringSslConnector {
-    type Transport = BoringSsl;
-
-    fn connect(&self) -> Result<Self::Transport> {
+    fn connect(&self) -> Result<Box<dyn Transport>> {
         let sock = TcpStream::connect(&self.addr[..])?;
         configure_stream(
             &sock,
@@ -106,6 +98,6 @@ impl Connector for BoringSslConnector {
         )?;
         let mut tls_stream = self.inner.connect(&self.domain, sock)?;
         tls_stream.do_handshake()?;
-        Ok(tls_stream)
+        Ok(Box::new(tls_stream))
     }
 }

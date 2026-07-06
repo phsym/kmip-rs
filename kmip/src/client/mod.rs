@@ -61,7 +61,7 @@ pub trait TlsBackend: 'static + Send + Sync {
         builder: &ClientBuilder,
         addr: Vec<SocketAddr>,
         domain: &str,
-    ) -> Result<Arc<dyn Connector<Transport = Box<dyn Transport>>>>;
+    ) -> Result<Arc<dyn Connector>>;
 }
 
 #[must_use = "builder must be used to create a Client"]
@@ -135,7 +135,7 @@ impl ClientBuilder {
     pub fn connect(self, addr: impl ToSocketAddrs, domain: &str) -> Result<Client> {
         let addr = addr.to_socket_addrs()?.collect();
         let connector = self.tls_backend.create_connector(&self, addr, domain)?;
-        Client::new_arc(connector)
+        Client::new(connector)
     }
 
     // TODO: Add KMIP authentication
@@ -157,35 +157,18 @@ pub(crate) fn configure_stream(
 pub trait Transport: Read + Write + Send {}
 impl<T> Transport for T where T: Read + Write + Send {}
 
-pub trait Connector: Send + Sync {
-    type Transport: Transport;
-    fn connect(&self) -> Result<Self::Transport>;
-}
-struct BoxedConnector<C: Connector>(C);
-impl<C: Connector> Connector for BoxedConnector<C>
-where
-    for<'a> C::Transport: 'a,
-{
-    type Transport = Box<dyn Transport>;
-
-    fn connect(&self) -> Result<Self::Transport> {
-        Ok(Box::new(self.0.connect()?))
-    }
-}
-
-/// Erases a concrete [`Connector`] into the boxed-transport form that
-/// [`Client`] stores internally.
+/// Establishes connections on behalf of a [`Client`].
 ///
-/// [`TlsBackend`] implementations use this to build their return value from a
-/// backend-specific connector.
-pub fn boxed_connector<C: Connector + 'static>(
-    connector: C,
-) -> Arc<dyn Connector<Transport = Box<dyn Transport>>> {
-    Arc::new(BoxedConnector(connector))
+/// The client keeps its connector and calls [`connect`](Connector::connect)
+/// again whenever a fresh connection is needed (e.g. [`Client::try_clone`]).
+pub trait Connector: Send + Sync {
+    /// Opens a new connection, returning a stream ready for KMIP traffic:
+    /// connected and, for TLS backends, with the handshake already completed.
+    fn connect(&self) -> Result<Box<dyn Transport>>;
 }
 
 pub struct Client {
-    connector: Arc<dyn Connector<Transport = Box<dyn Transport>>>,
+    connector: Arc<dyn Connector>,
     supported_versions: Vec<ProtocolVersion>,
     version: Option<ProtocolVersion>,
     conn: ttlv::Stream<Box<dyn Transport>>,
@@ -198,11 +181,7 @@ impl Client {
         ClientBuilder::default()
     }
 
-    pub fn new<C: Connector + 'static>(connector: C) -> Result<Self> {
-        Self::new_arc(boxed_connector(connector))
-    }
-
-    fn new_arc(connector: Arc<dyn Connector<Transport = Box<dyn Transport>>>) -> Result<Self> {
+    pub fn new(connector: Arc<dyn Connector>) -> Result<Self> {
         Ok(Self {
             conn: ttlv::Stream::new(connector.connect()?),
             connector,
@@ -569,9 +548,8 @@ mod tests {
 
     struct LocalConnector(std::net::SocketAddr);
     impl Connector for LocalConnector {
-        type Transport = TcpStream;
-        fn connect(&self) -> Result<Self::Transport> {
-            Ok(TcpStream::connect(self.0)?)
+        fn connect(&self) -> Result<Box<dyn Transport>> {
+            Ok(Box::new(TcpStream::connect(self.0)?))
         }
     }
 
@@ -591,7 +569,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let original = Client::new(LocalConnector(addr))
+        let original = Client::new(Arc::new(LocalConnector(addr)))
             .unwrap()
             .with_middleware(NoopMiddleware);
 
@@ -609,7 +587,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let original = Client::new(LocalConnector(addr))
+        let original = Client::new(Arc::new(LocalConnector(addr)))
             .unwrap()
             .with_middleware(NoopMiddleware);
         let clone = original.try_clone().unwrap();
