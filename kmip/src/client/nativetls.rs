@@ -10,6 +10,13 @@ use crate::Result;
 
 use super::{ClientBuilder, Connector, TlsBackend, Transport, configure_stream};
 
+/// TLS backend delegating to the OS implementation via native-tls.
+///
+/// Unlike the other backends, the client identity private key passed to
+/// [`ClientBuilder::identity`] must be PKCS#8-encoded
+/// (`-----BEGIN PRIVATE KEY-----`); PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`)
+/// and SEC1 (`-----BEGIN EC PRIVATE KEY-----`) keys are rejected. Convert with
+/// `openssl pkcs8 -topk8 -nocrypt` if needed.
 pub struct NativeTlsBackend;
 
 impl TlsBackend for NativeTlsBackend {
