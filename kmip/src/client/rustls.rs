@@ -1,9 +1,5 @@
 use core::str;
-use std::{
-    net::{SocketAddr, TcpStream},
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use rustls::{
     ClientConfig, ClientConnection, RootCertStore, StreamOwned,
@@ -16,12 +12,12 @@ use rustls_platform_verifier::BuilderVerifierExt;
 
 use crate::{Error, Result};
 
-use super::{ClientBuilder, Connector, TlsBackend, Transport, configure_stream};
+use super::{ClientBuilder, Connector, TlsBackend, Transport, dial};
 
 pub struct RustlsConnector {
     cfg: Arc<ClientConfig>,
     domain: String,
-    addr: Vec<SocketAddr>,
+    addr: String,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     tcp_nodelay: bool,
@@ -30,7 +26,7 @@ pub struct RustlsConnector {
 impl RustlsConnector {
     pub fn new(
         cfg: ClientConfig,
-        addr: Vec<SocketAddr>,
+        addr: impl Into<String>,
         domain: impl Into<String>,
         read_timeout: Option<Duration>,
         write_timeout: Option<Duration>,
@@ -39,7 +35,7 @@ impl RustlsConnector {
         Self {
             cfg: Arc::new(cfg),
             domain: domain.into(),
-            addr,
+            addr: addr.into(),
             read_timeout,
             write_timeout,
             tcp_nodelay,
@@ -56,9 +52,8 @@ impl Connector for RustlsConnector {
                 .try_into()
                 .map_err(|e: InvalidDnsNameError| Error::TLS(e.into()))?,
         )?;
-        let mut sock = TcpStream::connect(&self.addr[..])?;
-        configure_stream(
-            &sock,
+        let mut sock = dial(
+            self.addr.as_str(),
             self.read_timeout,
             self.write_timeout,
             self.tcp_nodelay,
@@ -76,7 +71,7 @@ impl TlsBackend for RustlsBackend {
     fn create_connector(
         &self,
         builder: &ClientBuilder,
-        addr: Vec<SocketAddr>,
+        addr: String,
         domain: &str,
     ) -> Result<Arc<dyn Connector>> {
         let cfg = if !builder.root_certs.is_empty() {

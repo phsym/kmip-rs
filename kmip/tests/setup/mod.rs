@@ -22,7 +22,7 @@ pub fn new_client() -> Client {
         .unwrap()
         .identity_file(&cert, &key)
         .unwrap()
-        .connect(&addr, &domain)
+        .connect(addr, &domain)
         .unwrap()
         .with_middleware(CorrelationValueMiddleware::uuid())
         .with_middleware(DebugMiddleware)

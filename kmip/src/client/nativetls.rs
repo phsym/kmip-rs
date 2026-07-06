@@ -1,14 +1,10 @@
-use std::{
-    net::{SocketAddr, TcpStream},
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use native_tls::{Certificate, Identity, Protocol, TlsConnector};
 
 use crate::Result;
 
-use super::{ClientBuilder, Connector, TlsBackend, Transport, configure_stream};
+use super::{ClientBuilder, Connector, TlsBackend, Transport, dial};
 
 /// TLS backend delegating to the OS implementation via native-tls.
 ///
@@ -23,7 +19,7 @@ impl TlsBackend for NativeTlsBackend {
     fn create_connector(
         &self,
         builder: &ClientBuilder,
-        addr: Vec<SocketAddr>,
+        addr: String,
         domain: &str,
     ) -> Result<Arc<dyn Connector>> {
         let mut bld = TlsConnector::builder();
@@ -59,7 +55,7 @@ impl TlsBackend for NativeTlsBackend {
 pub struct NativeTlsConnector {
     inner: TlsConnector,
     domain: String,
-    addr: Vec<SocketAddr>,
+    addr: String,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     tcp_nodelay: bool,
@@ -68,7 +64,7 @@ pub struct NativeTlsConnector {
 impl NativeTlsConnector {
     pub fn new(
         cfg: TlsConnector,
-        addr: Vec<SocketAddr>,
+        addr: impl Into<String>,
         domain: impl Into<String>,
         read_timeout: Option<Duration>,
         write_timeout: Option<Duration>,
@@ -77,7 +73,7 @@ impl NativeTlsConnector {
         Self {
             inner: cfg,
             domain: domain.into(),
-            addr,
+            addr: addr.into(),
             read_timeout,
             write_timeout,
             tcp_nodelay,
@@ -87,9 +83,8 @@ impl NativeTlsConnector {
 
 impl Connector for NativeTlsConnector {
     fn connect(&self) -> Result<Box<dyn Transport>> {
-        let sock = TcpStream::connect(&self.addr[..])?;
-        configure_stream(
-            &sock,
+        let sock = dial(
+            self.addr.as_str(),
             self.read_timeout,
             self.write_timeout,
             self.tcp_nodelay,

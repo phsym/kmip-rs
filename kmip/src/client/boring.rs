@@ -1,8 +1,4 @@
-use std::{
-    net::{SocketAddr, TcpStream},
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use boring::{
     pkey::PKey,
@@ -12,7 +8,7 @@ use boring::{
 
 use crate::{Error, Result};
 
-use super::{ClientBuilder, Connector, TlsBackend, Transport, configure_stream};
+use super::{ClientBuilder, Connector, TlsBackend, Transport, dial};
 
 pub struct BoringBackend;
 
@@ -20,7 +16,7 @@ impl TlsBackend for BoringBackend {
     fn create_connector(
         &self,
         builder: &ClientBuilder,
-        addr: Vec<SocketAddr>,
+        addr: String,
         domain: &str,
     ) -> Result<Arc<dyn Connector>> {
         let mut bld = SslConnector::builder(SslMethod::tls())?;
@@ -69,7 +65,7 @@ impl TlsBackend for BoringBackend {
 pub struct BoringSslConnector {
     inner: SslConnector,
     domain: String,
-    addr: Vec<SocketAddr>,
+    addr: String,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     tcp_nodelay: bool,
@@ -78,7 +74,7 @@ pub struct BoringSslConnector {
 impl BoringSslConnector {
     pub fn new(
         cfg: SslConnector,
-        addr: Vec<SocketAddr>,
+        addr: impl Into<String>,
         domain: impl Into<String>,
         read_timeout: Option<Duration>,
         write_timeout: Option<Duration>,
@@ -87,7 +83,7 @@ impl BoringSslConnector {
         Self {
             inner: cfg,
             domain: domain.into(),
-            addr,
+            addr: addr.into(),
             read_timeout,
             write_timeout,
             tcp_nodelay,
@@ -97,9 +93,8 @@ impl BoringSslConnector {
 
 impl Connector for BoringSslConnector {
     fn connect(&self) -> Result<Box<dyn Transport>> {
-        let sock = TcpStream::connect(&self.addr[..])?;
-        configure_stream(
-            &sock,
+        let sock = dial(
+            self.addr.as_str(),
             self.read_timeout,
             self.write_timeout,
             self.tcp_nodelay,
