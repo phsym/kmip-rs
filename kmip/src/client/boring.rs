@@ -6,7 +6,7 @@ use std::{
 
 use boring::{
     pkey::PKey,
-    ssl::{SslConnector, SslMethod, SslVerifyMode},
+    ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion},
     x509::X509,
 };
 
@@ -24,6 +24,7 @@ impl TlsBackend for BoringBackend {
         domain: &str,
     ) -> Result<Arc<dyn Connector>> {
         let mut bld = SslConnector::builder(SslMethod::tls())?;
+        bld.set_min_proto_version(Some(SslVersion::TLS1_2))?;
 
         for root in &builder.root_certs {
             let certs = X509::stack_from_pem(root)?;
