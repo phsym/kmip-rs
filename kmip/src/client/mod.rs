@@ -23,6 +23,9 @@ use ttlv::{Decodable, Encodable};
 mod batch;
 pub use batch::*;
 
+mod cluster;
+pub use cluster::*;
+
 pub mod exec;
 
 #[cfg(feature = "pool")]
@@ -126,6 +129,9 @@ pub struct ClientBuilder {
     // Transport-layer config handed to the TLS backend to build a connector.
     connector: ConnectorConfig,
     backend: Box<dyn TransportBackend>,
+    // Cluster-only policy, used by `connect_cluster` and ignored by `connect`.
+    retry_cooldown: Option<Duration>,
+    cluster_mode: ClusterMode,
     middlewares: Vec<Arc<dyn Middleware<crate::Error>>>,
     version: Option<ProtocolVersion>,
     // Protocol config forwarded onto the built `ClientConfig`. `None` for
@@ -149,6 +155,8 @@ impl ClientBuilder {
         Self {
             connector: ConnectorConfig::default(),
             backend: Box::new(backend),
+            retry_cooldown: None,
+            cluster_mode: ClusterMode::default(),
             middlewares: Vec::new(),
             version: None,
             supported_versions: None,
@@ -202,6 +210,23 @@ impl ClientBuilder {
         self
     }
 
+    /// Sets the per-endpoint cooldown window used by [`Self::connect_cluster`]:
+    /// after a failed dial, an endpoint is skipped for this duration before it
+    /// is dialed again. Has no effect on [`Self::connect`]. Defaults to 5s when
+    /// unset ([`DEFAULT_RETRY_COOLDOWN`]).
+    pub fn retry_cooldown(mut self, cooldown: Duration) -> Self {
+        self.retry_cooldown = Some(cooldown);
+        self
+    }
+
+    /// Selects how [`Self::connect_cluster`] picks endpoints:
+    /// [`ClusterMode::Failover`] (default) or [`ClusterMode::RoundRobin`] load
+    /// balancing. Has no effect on [`Self::connect`].
+    pub fn cluster_mode(mut self, mode: ClusterMode) -> Self {
+        self.cluster_mode = mode;
+        self
+    }
+
     /// Appends a middleware to the chain of every client built here. The
     /// middleware chain is shared cheaply (via `Arc`) across all clients built
     /// from this configuration.
@@ -232,6 +257,14 @@ impl ClientBuilder {
         let connector = self
             .backend
             .create_connector(&self.connector, addr.into(), domain)?;
+        Ok(self.build_with_connector(connector))
+    }
+
+    /// Builds the `ClientConfig` for an already-created `connector`, carrying
+    /// over the protocol settings staged via the `with_*` methods. Shared by
+    /// [`build`](Self::build) and [`connect_cluster`](Self::connect_cluster),
+    /// which supplies a [`ClusterConnector`] spanning several endpoints.
+    fn build_with_connector(&self, connector: Arc<dyn Connector>) -> ClientConfig {
         let mut config = ClientConfig::new(connector);
         if let Some(versions) = &self.supported_versions {
             config = config.with_supported_versions(versions);
@@ -245,7 +278,7 @@ impl ClientBuilder {
         // owned), so `make_mut` never clones, and extending with an empty chain
         // is a no-op. No need to guard on `is_empty`.
         Arc::make_mut(&mut config.middlewares).extend(self.middlewares.iter().cloned());
-        Ok(config)
+        config
     }
 
     /// Connects to the KMIP server at `addr` (a `"host:port"` string),
@@ -261,6 +294,36 @@ impl ClientBuilder {
     /// more than once with different addresses.
     pub fn connect(&self, addr: impl Into<String>, domain: &str) -> Result<Client> {
         self.build(addr, domain)?.connect()
+    }
+
+    /// Connects to a pool of KMIP endpoints with failover and optional load
+    /// balancing (see [`ClusterConnector`] / [`Self::cluster_mode`]), using the
+    /// configured transport backend for every endpoint.
+    ///
+    /// Each entry in `addrs` is a `"host:port"` string, re-resolved on every
+    /// connection like [`Self::connect`]. All endpoints share the single SNI /
+    /// certificate `domain`: a cluster is one logical service, so whichever node
+    /// answers a given connection is validated against the same identity. The
+    /// per-endpoint cooldown is [`Self::retry_cooldown`] (default
+    /// [`DEFAULT_RETRY_COOLDOWN`]).
+    pub fn connect_cluster(
+        &self,
+        addrs: impl IntoIterator<Item = impl Into<String>>,
+        domain: &str,
+    ) -> Result<Client> {
+        let connectors = addrs
+            .into_iter()
+            .map(|addr| {
+                self.backend
+                    .create_connector(&self.connector, addr.into(), domain)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let cluster = ClusterConnector::with_mode(
+            connectors,
+            self.retry_cooldown.unwrap_or(DEFAULT_RETRY_COOLDOWN),
+            self.cluster_mode,
+        )?;
+        self.build_with_connector(Arc::new(cluster)).connect()
     }
 
     // TODO: Add KMIP authentication
@@ -639,6 +702,19 @@ mod tests {
             Some(Duration::from_secs(30))
         );
         assert!(builder.connector.tcp_nodelay);
+        assert_eq!(builder.retry_cooldown, None);
+        assert_eq!(builder.cluster_mode, ClusterMode::Failover);
+    }
+
+    #[cfg(feature = "default-tls-rustls")]
+    #[test]
+    fn test_client_builder_cluster_options() {
+        let builder = Client::builder()
+            .retry_cooldown(Duration::from_secs(2))
+            .cluster_mode(ClusterMode::RoundRobin);
+
+        assert_eq!(builder.retry_cooldown, Some(Duration::from_secs(2)));
+        assert_eq!(builder.cluster_mode, ClusterMode::RoundRobin);
     }
 
     #[cfg(feature = "default-tls-rustls")]
