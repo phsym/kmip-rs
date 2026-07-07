@@ -23,6 +23,9 @@ use ttlv::{Decodable, Encodable};
 mod batch;
 pub use batch::*;
 
+mod cluster;
+pub use cluster::*;
+
 pub mod exec;
 
 #[cfg(feature = "tls-rustls")]
@@ -71,6 +74,8 @@ pub struct ClientBuilder {
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     tcp_nodelay: bool,
+    retry_cooldown: Option<Duration>,
+    cluster_mode: ClusterMode,
     tls_backend: Box<dyn TlsBackend>,
 }
 
@@ -89,6 +94,8 @@ impl ClientBuilder {
             read_timeout: DEFAULT_SOCKET_TIMEOUT,
             write_timeout: DEFAULT_SOCKET_TIMEOUT,
             tcp_nodelay: true,
+            retry_cooldown: None,
+            cluster_mode: ClusterMode::default(),
             tls_backend: Box::new(tls),
         }
     }
@@ -140,6 +147,23 @@ impl ClientBuilder {
         self
     }
 
+    /// Sets the per-endpoint cooldown window used by [`Self::connect_cluster`]:
+    /// after a failed dial, an endpoint is skipped for this duration before it
+    /// is dialed again. Has no effect on [`Self::connect`]. Defaults to 5s when
+    /// unset ([`DEFAULT_RETRY_COOLDOWN`]).
+    pub fn retry_cooldown(mut self, cooldown: Duration) -> Self {
+        self.retry_cooldown = Some(cooldown);
+        self
+    }
+
+    /// Selects how [`Self::connect_cluster`] picks endpoints:
+    /// [`ClusterMode::Failover`] (default) or [`ClusterMode::RoundRobin`] load
+    /// balancing. Has no effect on [`Self::connect`].
+    pub fn cluster_mode(mut self, mode: ClusterMode) -> Self {
+        self.cluster_mode = mode;
+        self
+    }
+
     /// Connects to the KMIP server at `addr` (a `"host:port"` string),
     /// performing the TLS handshake with `domain` as the SNI hostname.
     ///
@@ -154,6 +178,36 @@ impl ClientBuilder {
             .tls_backend
             .create_connector(&self, addr.into(), domain)?;
         Client::new(connector)
+    }
+
+    /// Connects to a pool of KMIP endpoints with failover and optional load
+    /// balancing (see [`ClusterConnector`] / [`Self::cluster_mode`]), using the
+    /// configured [`TlsBackend`] for every endpoint.
+    ///
+    /// Each entry in `addrs` is a `"host:port"` string, re-resolved on every
+    /// connection like [`Self::connect`]. All endpoints share the single SNI /
+    /// certificate `domain`: a cluster is one logical service, so whichever node
+    /// answers a given connection is validated against the same identity. The
+    /// per-endpoint cooldown is [`Self::retry_cooldown`] (default
+    /// [`DEFAULT_RETRY_COOLDOWN`]).
+    pub fn connect_cluster(
+        self,
+        addrs: impl IntoIterator<Item = impl Into<String>>,
+        domain: &str,
+    ) -> Result<Client> {
+        let connectors = addrs
+            .into_iter()
+            .map(|addr| {
+                self.tls_backend
+                    .create_connector(&self, addr.into(), domain)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let cluster = ClusterConnector::with_mode(
+            connectors,
+            self.retry_cooldown.unwrap_or(DEFAULT_RETRY_COOLDOWN),
+            self.cluster_mode,
+        )?;
+        Client::new(Arc::new(cluster))
     }
 
     // TODO: Add KMIP authentication
@@ -442,6 +496,19 @@ mod tests {
         assert_eq!(builder.read_timeout, Some(Duration::from_secs(30)));
         assert_eq!(builder.write_timeout, Some(Duration::from_secs(30)));
         assert!(builder.tcp_nodelay);
+        assert_eq!(builder.retry_cooldown, None);
+        assert_eq!(builder.cluster_mode, ClusterMode::Failover);
+    }
+
+    #[cfg(feature = "default-tls-rustls")]
+    #[test]
+    fn test_client_builder_cluster_options() {
+        let builder = ClientBuilder::default()
+            .retry_cooldown(Duration::from_secs(2))
+            .cluster_mode(ClusterMode::RoundRobin);
+
+        assert_eq!(builder.retry_cooldown, Some(Duration::from_secs(2)));
+        assert_eq!(builder.cluster_mode, ClusterMode::RoundRobin);
     }
 
     #[cfg(feature = "default-tls-rustls")]
