@@ -105,3 +105,35 @@ impl Connector for OpenSslConnector {
         Ok(Box::new(tls_stream))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ClientBuilder, OpenSslBackend, TlsBackend};
+
+    const VALID: &str = include_str!("../../tests/pykmip/root_certificate.pem");
+    // A CERTIFICATE block whose base64 decodes cleanly but is not valid DER.
+    const CORRUPT: &str = "-----BEGIN CERTIFICATE-----\nTm90QUNlcnQ=\n-----END CERTIFICATE-----\n";
+
+    // A bundle containing a malformed CERTIFICATE entry must be rejected
+    // outright, consistently with the other backends.
+    #[test]
+    fn rejects_bundle_with_malformed_certificate() {
+        let good =
+            ClientBuilder::new(OpenSslBackend).add_root_certificate(VALID.as_bytes().to_vec());
+        assert!(
+            OpenSslBackend
+                .create_connector(&good, "kmip.invalid:5696".to_string(), "kmip.invalid")
+                .is_ok(),
+            "a valid CA certificate should be accepted",
+        );
+
+        let mixed = ClientBuilder::new(OpenSslBackend)
+            .add_root_certificate(format!("{VALID}\n{CORRUPT}").into_bytes());
+        assert!(
+            OpenSslBackend
+                .create_connector(&mixed, "kmip.invalid:5696".to_string(), "kmip.invalid")
+                .is_err(),
+            "a bundle containing a malformed certificate must be rejected",
+        );
+    }
+}

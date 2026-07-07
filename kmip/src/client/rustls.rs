@@ -78,8 +78,12 @@ impl TlsBackend for RustlsBackend {
             let mut root_store = RootCertStore::empty();
             for root in &builder.root_certs {
                 let ca = pem::SliceIter::new(root).collect::<std::result::Result<Vec<_>, _>>()?;
-                let (added, _ignored) = root_store.add_parsable_certificates(ca);
-                if added == 0 {
+                let mut n = 0;
+                for cert in ca {
+                    root_store.add(cert)?;
+                    n += 1;
+                }
+                if n == 0 {
                     return Err(Error::TLS("No valid root certificates found".into()));
                 }
             }
@@ -106,5 +110,38 @@ impl TlsBackend for RustlsBackend {
             builder.write_timeout,
             builder.tcp_nodelay,
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ClientBuilder, RustlsBackend, TlsBackend};
+
+    const VALID: &str = include_str!("../../tests/pykmip/root_certificate.pem");
+    // A CERTIFICATE block whose base64 decodes cleanly but is not valid DER.
+    const CORRUPT: &str = "-----BEGIN CERTIFICATE-----\nTm90QUNlcnQ=\n-----END CERTIFICATE-----\n";
+
+    // A bundle containing a malformed CERTIFICATE entry must be rejected
+    // outright, consistently with the other backends — never silently dropped
+    // (regression for the previous add_parsable_certificates leniency).
+    #[test]
+    fn rejects_bundle_with_malformed_certificate() {
+        let good =
+            ClientBuilder::new(RustlsBackend).add_root_certificate(VALID.as_bytes().to_vec());
+        assert!(
+            RustlsBackend
+                .create_connector(&good, "kmip.invalid:5696".to_string(), "kmip.invalid")
+                .is_ok(),
+            "a valid CA certificate should be accepted",
+        );
+
+        let mixed = ClientBuilder::new(RustlsBackend)
+            .add_root_certificate(format!("{VALID}\n{CORRUPT}").into_bytes());
+        assert!(
+            RustlsBackend
+                .create_connector(&mixed, "kmip.invalid:5696".to_string(), "kmip.invalid")
+                .is_err(),
+            "a bundle containing a malformed certificate must be rejected",
+        );
     }
 }
