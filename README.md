@@ -101,6 +101,12 @@ chosen by a `TlsBackend` implementation rather than a per-backend method.
 | `tls-openssl` | `OpenSslBackend`   | Requires a system OpenSSL.                                  |
 | `tls-boring`  | `BoringBackend`    | Useful when matching a BoringSSL-based server stack.        |
 
+> **Note:** with `NativeTlsBackend`, the client identity private key passed to
+> `ClientBuilder::identity` / `identity_file` must be PKCS#8-encoded
+> (`-----BEGIN PRIVATE KEY-----`). The other backends also accept PKCS#1
+> (`-----BEGIN RSA PRIVATE KEY-----`) and SEC1 (`-----BEGIN EC PRIVATE KEY-----`)
+> keys. Convert with `openssl pkcs8 -topk8 -nocrypt` if needed.
+
 Pick a backend at runtime by passing its type to `ClientBuilder::new`:
 
 ```rust,no_run

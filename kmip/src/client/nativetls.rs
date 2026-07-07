@@ -1,54 +1,61 @@
-use std::{
-    io,
-    net::{SocketAddr, TcpStream},
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
-use native_tls::{Certificate, HandshakeError, Identity, Protocol, TlsConnector, TlsStream};
+use native_tls::{Certificate, Identity, Protocol, TlsConnector};
 
-use crate::{
-    Result,
-    client::{TlsBackend, boxed_connector},
-};
+use crate::Result;
 
-use super::{ClientBuilder, Connector, configure_stream};
+use super::{ClientBuilder, Connector, TlsBackend, Transport, dial};
 
-pub type NativeTls = TlsStream<TcpStream>;
-
+/// TLS backend delegating to the OS implementation via native-tls.
+///
+/// Unlike the other backends, the client identity private key passed to
+/// [`ClientBuilder::identity`] must be PKCS#8-encoded
+/// (`-----BEGIN PRIVATE KEY-----`); PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`)
+/// and SEC1 (`-----BEGIN EC PRIVATE KEY-----`) keys are rejected. Convert with
+/// `openssl pkcs8 -topk8 -nocrypt` if needed.
 pub struct NativeTlsBackend;
 
 impl TlsBackend for NativeTlsBackend {
     fn create_connector(
         &self,
         builder: &ClientBuilder,
-        addr: Vec<SocketAddr>,
+        addr: String,
         domain: &str,
-    ) -> Result<Arc<dyn Connector<Transport = Box<dyn super::Transport>>>> {
+    ) -> Result<Arc<dyn Connector>> {
         let mut bld = TlsConnector::builder();
+        if !builder.root_certs.is_empty() {
+            // If root CAs have been provided, disable system roots
+            bld.disable_built_in_roots(true);
+        }
         for root in &builder.root_certs {
-            bld.add_root_certificate(Certificate::from_pem(root)?);
+            let certs = Certificate::stack_from_pem(root)?;
+            if certs.is_empty() {
+                return Err(crate::Error::TLS("No valid root certificates found".into()));
+            }
+            for cert in certs {
+                bld.add_root_certificate(cert);
+            }
         }
         if let Some((cert, key)) = &builder.identity {
             bld.identity(Identity::from_pkcs8(cert, key)?);
         }
         bld.min_protocol_version(Some(Protocol::Tlsv12));
 
-        Ok(boxed_connector(NativeTlsConnector::new(
+        Ok(Arc::new(NativeTlsConnector::new(
             bld.build()?,
             addr,
             domain,
             builder.read_timeout,
             builder.write_timeout,
             builder.tcp_nodelay,
-        )?))
+        )))
     }
 }
 
 pub struct NativeTlsConnector {
     inner: TlsConnector,
     domain: String,
-    addr: Vec<SocketAddr>,
+    addr: String,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     tcp_nodelay: bool,
@@ -57,39 +64,32 @@ pub struct NativeTlsConnector {
 impl NativeTlsConnector {
     pub fn new(
         cfg: TlsConnector,
-        addr: Vec<SocketAddr>,
+        addr: impl Into<String>,
         domain: impl Into<String>,
         read_timeout: Option<Duration>,
         write_timeout: Option<Duration>,
         tcp_nodelay: bool,
-    ) -> io::Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             inner: cfg,
             domain: domain.into(),
-            addr,
+            addr: addr.into(),
             read_timeout,
             write_timeout,
             tcp_nodelay,
-        })
+        }
     }
 }
 
 impl Connector for NativeTlsConnector {
-    type Transport = NativeTls;
-
-    fn connect(&self) -> Result<Self::Transport> {
-        let sock = TcpStream::connect(&self.addr[..])?;
-        configure_stream(
-            &sock,
+    fn connect(&self) -> Result<Box<dyn Transport>> {
+        let sock = dial(
+            self.addr.as_str(),
             self.read_timeout,
             self.write_timeout,
             self.tcp_nodelay,
         )?;
-        let tls_stream = match self.inner.connect(&self.domain, sock) {
-            Ok(v) => v,
-            Err(HandshakeError::Failure(e)) => Err(e)?,
-            Err(HandshakeError::WouldBlock(..)) => unreachable!(),
-        };
-        Ok(tls_stream)
+        let tls_stream = self.inner.connect(&self.domain, sock)?;
+        Ok(Box::new(tls_stream))
     }
 }

@@ -11,7 +11,7 @@ use crate::{
 use std::{
     fs,
     io::{self, ErrorKind, Read, Write},
-    net::{SocketAddr, TcpStream, ToSocketAddrs},
+    net::TcpStream,
     path::Path,
     sync::Arc,
     time::Duration,
@@ -59,9 +59,9 @@ pub trait TlsBackend: 'static + Send + Sync {
     fn create_connector(
         &self,
         builder: &ClientBuilder,
-        addr: Vec<SocketAddr>,
+        addr: String,
         domain: &str,
-    ) -> Result<Arc<dyn Connector<Transport = Box<dyn Transport>>>>;
+    ) -> Result<Arc<dyn Connector>>;
 }
 
 #[must_use = "builder must be used to create a Client"]
@@ -97,6 +97,9 @@ impl ClientBuilder {
         Ok(self.add_root_certificate(fs::read(path)?))
     }
 
+    /// Reads the client certificate chain and private key from PEM files.
+    ///
+    /// See [`identity`](Self::identity) for the accepted key formats.
     pub fn identity_file(self, cert: impl AsRef<Path>, key: impl AsRef<Path>) -> io::Result<Self> {
         Ok(self.identity(fs::read(cert)?, fs::read(key)?))
     }
@@ -106,6 +109,11 @@ impl ClientBuilder {
         self
     }
 
+    /// Sets the client certificate chain and private key (both PEM-encoded)
+    /// used for TLS client authentication.
+    ///
+    /// The accepted private key formats depend on the TLS backend; see the
+    /// backend type's documentation (e.g. `NativeTlsBackend`).
     pub fn identity(mut self, cert_pem: Vec<u8>, key_pem: Vec<u8>) -> Self {
         self.identity = Some((cert_pem, key_pem));
         self
@@ -132,17 +140,27 @@ impl ClientBuilder {
         self
     }
 
-    pub fn connect(self, addr: impl ToSocketAddrs, domain: &str) -> Result<Client> {
-        let addr = addr.to_socket_addrs()?.collect();
-        let connector = self.tls_backend.create_connector(&self, addr, domain)?;
-        Client::new_arc(connector)
+    /// Connects to the KMIP server at `addr` (a `"host:port"` string),
+    /// performing the TLS handshake with `domain` as the SNI hostname.
+    ///
+    /// The address is stored as-is and re-resolved on every connection the
+    /// client opens (initial connect, [`Client::try_clone`], and reconnects
+    /// after an unexpected EOF). This means DNS is queried again on each
+    /// reconnect, so a server that fails over to a new IP behind the same
+    /// hostname is picked up without rebuilding the client. A literal IP such
+    /// as `"10.0.0.1:5696"` is accepted too (it is parsed, not resolved).
+    pub fn connect(self, addr: impl Into<String>, domain: &str) -> Result<Client> {
+        let connector = self
+            .tls_backend
+            .create_connector(&self, addr.into(), domain)?;
+        Client::new(connector)
     }
 
     // TODO: Add KMIP authentication
     // TODO: Fine tune TLS cipher suites when/if possible
 }
 
-pub(crate) fn configure_stream(
+fn configure_stream(
     stream: &TcpStream,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
@@ -154,38 +172,35 @@ pub(crate) fn configure_stream(
     Ok(())
 }
 
+/// Opens a TCP connection to `addr` (a `"host:port"` string, re-resolved on
+/// every call) and applies the shared socket options. Used by every TLS
+/// backend to dial the server before running its handshake.
+pub(crate) fn dial(
+    addr: &str,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
+    tcp_nodelay: bool,
+) -> io::Result<TcpStream> {
+    let stream = TcpStream::connect(addr)?;
+    configure_stream(&stream, read_timeout, write_timeout, tcp_nodelay)?;
+    Ok(stream)
+}
+
 pub trait Transport: Read + Write + Send {}
 impl<T> Transport for T where T: Read + Write + Send {}
 
-pub trait Connector: Send + Sync {
-    type Transport: Transport;
-    fn connect(&self) -> Result<Self::Transport>;
-}
-struct BoxedConnector<C: Connector>(C);
-impl<C: Connector> Connector for BoxedConnector<C>
-where
-    for<'a> C::Transport: 'a,
-{
-    type Transport = Box<dyn Transport>;
-
-    fn connect(&self) -> Result<Self::Transport> {
-        Ok(Box::new(self.0.connect()?))
-    }
-}
-
-/// Erases a concrete [`Connector`] into the boxed-transport form that
-/// [`Client`] stores internally.
+/// Establishes connections on behalf of a [`Client`].
 ///
-/// [`TlsBackend`] implementations use this to build their return value from a
-/// backend-specific connector.
-pub fn boxed_connector<C: Connector + 'static>(
-    connector: C,
-) -> Arc<dyn Connector<Transport = Box<dyn Transport>>> {
-    Arc::new(BoxedConnector(connector))
+/// The client keeps its connector and calls [`connect`](Connector::connect)
+/// again whenever a fresh connection is needed (e.g. [`Client::try_clone`]).
+pub trait Connector: Send + Sync {
+    /// Opens a new connection, returning a stream ready for KMIP traffic:
+    /// connected and, for TLS backends, with the handshake already completed.
+    fn connect(&self) -> Result<Box<dyn Transport>>;
 }
 
 pub struct Client {
-    connector: Arc<dyn Connector<Transport = Box<dyn Transport>>>,
+    connector: Arc<dyn Connector>,
     supported_versions: Vec<ProtocolVersion>,
     version: Option<ProtocolVersion>,
     conn: ttlv::Stream<Box<dyn Transport>>,
@@ -198,11 +213,7 @@ impl Client {
         ClientBuilder::default()
     }
 
-    pub fn new<C: Connector + 'static>(connector: C) -> Result<Self> {
-        Self::new_arc(boxed_connector(connector))
-    }
-
-    fn new_arc(connector: Arc<dyn Connector<Transport = Box<dyn Transport>>>) -> Result<Self> {
+    pub fn new(connector: Arc<dyn Connector>) -> Result<Self> {
         Ok(Self {
             conn: ttlv::Stream::new(connector.connect()?),
             connector,
@@ -567,11 +578,12 @@ mod tests {
         }
     }
 
-    struct LocalConnector(std::net::SocketAddr);
+    /// Connects via a re-resolvable `"host:port"` string, mirroring how the
+    /// real TLS connectors dial the server on every `connect()`.
+    struct LocalConnector(String);
     impl Connector for LocalConnector {
-        type Transport = TcpStream;
-        fn connect(&self) -> Result<Self::Transport> {
-            Ok(TcpStream::connect(self.0)?)
+        fn connect(&self) -> Result<Box<dyn Transport>> {
+            Ok(Box::new(TcpStream::connect(self.0.as_str())?))
         }
     }
 
@@ -591,7 +603,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let original = Client::new(LocalConnector(addr))
+        let original = Client::new(Arc::new(LocalConnector(addr.to_string())))
             .unwrap()
             .with_middleware(NoopMiddleware);
 
@@ -609,11 +621,23 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let original = Client::new(LocalConnector(addr))
+        let original = Client::new(Arc::new(LocalConnector(addr.to_string())))
             .unwrap()
             .with_middleware(NoopMiddleware);
         let clone = original.try_clone().unwrap();
 
         assert!(Arc::ptr_eq(&original.middlewares, &clone.middlewares));
+    }
+
+    #[test]
+    fn try_clone_reconnects_via_hostname() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // A "host:port" string is re-resolved on every connect(), so both the
+        // initial connection and the reconnect performed by try_clone resolve
+        // the hostname afresh and succeed.
+        let original = Client::new(Arc::new(LocalConnector(format!("localhost:{port}")))).unwrap();
+        let _clone = original.try_clone().unwrap();
     }
 }

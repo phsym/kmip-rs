@@ -1,24 +1,14 @@
-use std::{
-    io,
-    net::{SocketAddr, TcpStream},
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use boring::{
     pkey::PKey,
-    ssl::{SslConnector, SslMethod, SslStream, SslVerifyMode},
-    x509::X509,
+    ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion},
+    x509::{X509, store::X509StoreBuilder},
 };
 
-use crate::{
-    Error, Result,
-    client::{TlsBackend, boxed_connector},
-};
+use crate::{Error, Result};
 
-use super::{ClientBuilder, Connector, configure_stream};
-
-pub type BoringSsl = SslStream<TcpStream>;
+use super::{ClientBuilder, Connector, TlsBackend, Transport, dial};
 
 pub struct BoringBackend;
 
@@ -26,13 +16,21 @@ impl TlsBackend for BoringBackend {
     fn create_connector(
         &self,
         builder: &ClientBuilder,
-        addr: Vec<SocketAddr>,
+        addr: String,
         domain: &str,
-    ) -> Result<Arc<dyn Connector<Transport = Box<dyn super::Transport>>>> {
+    ) -> Result<Arc<dyn Connector>> {
         let mut bld = SslConnector::builder(SslMethod::tls())?;
+        bld.set_min_proto_version(Some(SslVersion::TLS1_2))?;
 
+        if !builder.root_certs.is_empty() {
+            // If root CAs have been provided, disable system roots
+            bld.set_cert_store(X509StoreBuilder::new()?.build());
+        }
         for root in &builder.root_certs {
             let certs = X509::stack_from_pem(root)?;
+            if certs.is_empty() {
+                return Err(Error::TLS("No valid root certificates found".into()));
+            }
             for cert in certs {
                 bld.cert_store_mut().add_cert(cert)?;
             }
@@ -53,21 +51,21 @@ impl TlsBackend for BoringBackend {
         }
 
         bld.set_verify(SslVerifyMode::PEER);
-        Ok(boxed_connector(BoringSslConnector::new(
+        Ok(Arc::new(BoringSslConnector::new(
             bld.build(),
             addr,
             domain,
             builder.read_timeout,
             builder.write_timeout,
             builder.tcp_nodelay,
-        )?))
+        )))
     }
 }
 
 pub struct BoringSslConnector {
     inner: SslConnector,
     domain: String,
-    addr: Vec<SocketAddr>,
+    addr: String,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     tcp_nodelay: bool,
@@ -76,36 +74,33 @@ pub struct BoringSslConnector {
 impl BoringSslConnector {
     pub fn new(
         cfg: SslConnector,
-        addr: Vec<SocketAddr>,
+        addr: impl Into<String>,
         domain: impl Into<String>,
         read_timeout: Option<Duration>,
         write_timeout: Option<Duration>,
         tcp_nodelay: bool,
-    ) -> io::Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             inner: cfg,
             domain: domain.into(),
-            addr,
+            addr: addr.into(),
             read_timeout,
             write_timeout,
             tcp_nodelay,
-        })
+        }
     }
 }
 
 impl Connector for BoringSslConnector {
-    type Transport = BoringSsl;
-
-    fn connect(&self) -> Result<Self::Transport> {
-        let sock = TcpStream::connect(&self.addr[..])?;
-        configure_stream(
-            &sock,
+    fn connect(&self) -> Result<Box<dyn Transport>> {
+        let sock = dial(
+            self.addr.as_str(),
             self.read_timeout,
             self.write_timeout,
             self.tcp_nodelay,
         )?;
         let mut tls_stream = self.inner.connect(&self.domain, sock)?;
         tls_stream.do_handshake()?;
-        Ok(tls_stream)
+        Ok(Box::new(tls_stream))
     }
 }
