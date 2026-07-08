@@ -23,18 +23,21 @@ impl TlsBackend for OpenSslBackend {
         bld.set_min_proto_version(Some(SslVersion::TLS1_2))?;
 
         if !builder.root_certs.is_empty() {
-            // If root CAs have been provided, disable system roots
-            bld.set_cert_store(X509StoreBuilder::new()?.build());
-        }
-
-        for root in &builder.root_certs {
-            let certs = X509::stack_from_pem(root)?;
-            if certs.is_empty() {
-                return Err(Error::TLS("No valid root certificates found".into()));
+            // User-supplied CAs replace the system roots. Build the store fully
+            // before installing it — mirroring the boring backend and avoiding a
+            // post-install `cert_store_mut()` mutation. (openssl has no
+            // `set_cert_store_builder`, so install the built store directly.)
+            let mut store = X509StoreBuilder::new()?;
+            for root in &builder.root_certs {
+                let certs = X509::stack_from_pem(root)?;
+                if certs.is_empty() {
+                    return Err(Error::TLS("No valid root certificates found".into()));
+                }
+                for cert in certs {
+                    store.add_cert(cert)?;
+                }
             }
-            for cert in certs {
-                bld.cert_store_mut().add_cert(cert)?;
-            }
+            bld.set_cert_store(store.build());
         }
 
         if let Some((cert, key)) = &builder.identity {
