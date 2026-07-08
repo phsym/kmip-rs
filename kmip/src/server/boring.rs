@@ -5,7 +5,7 @@ use std::{
 
 use boring::{
     pkey::PKey,
-    ssl::{SslAcceptor, SslMethod, SslStream, SslVerifyMode},
+    ssl::{SslAcceptor, SslMethod, SslStream, SslVerifyMode, SslVersion},
     x509::X509,
 };
 
@@ -62,10 +62,23 @@ impl Acceptor for BoringAcceptor {
 
 impl AcceptorBuilder<Ready> {
     pub fn listen_boring(&self, addr: impl ToSocketAddrs) -> crate::Result<BoringAcceptor> {
+        // Client certificates are mandatory (see `set_verify` below), so an empty
+        // CA set would reject every incoming connection. Fail fast instead.
+        if self.root_certs.is_empty() {
+            return Err(crate::Error::TLS(
+                "No root certificates supplied to verify client certificates".into(),
+            ));
+        }
+
         let mut acc = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
+        // `mozilla_intermediate` may still permit TLS 1.0/1.1; pin the floor to 1.2.
+        acc.set_min_proto_version(Some(SslVersion::TLS1_2))?;
 
         for root in &self.root_certs {
             let certs = X509::stack_from_pem(root)?;
+            if certs.is_empty() {
+                return Err(crate::Error::TLS("No valid root certificates found".into()));
+            }
             for cert in certs {
                 acc.cert_store_mut().add_cert(cert)?;
             }

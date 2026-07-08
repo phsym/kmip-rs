@@ -63,11 +63,23 @@ impl Acceptor for RustlsAcceptor {
 
 impl AcceptorBuilder<Ready> {
     pub fn listen_rustls(&self, addr: impl ToSocketAddrs) -> crate::Result<RustlsAcceptor> {
+        // Client certificates are mandatory (see the verifier below), so an empty
+        // CA set would reject every incoming connection. Fail fast instead.
+        if self.root_certs.is_empty() {
+            return Err(crate::Error::TLS(
+                "No root certificates supplied to verify client certificates".into(),
+            ));
+        }
+
         let mut root = RootCertStore::empty();
         for cert in &self.root_certs {
+            let before = root.len();
             let it = CertificateDer::pem_slice_iter(cert);
             for cert in it {
                 root.add(cert?)?;
+            }
+            if root.len() == before {
+                return Err(crate::Error::TLS("No valid root certificates found".into()));
             }
         }
 
