@@ -36,6 +36,8 @@ pub enum Error {
     #[cfg(feature = "pool")]
     #[error("Invalid connection pool configuration: {0}")]
     PoolConfig(String),
+    #[error("no cluster endpoint could be reached: {0}")]
+    ClusterUnavailable(String),
 }
 
 #[cfg(feature = "tls-rustls")]

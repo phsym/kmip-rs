@@ -15,13 +15,10 @@ use super::{Connector, ConnectorConfig, Transport, TransportBackend, dial};
 /// `openssl pkcs8 -topk8 -nocrypt` if needed.
 pub struct NativeTlsBackend;
 
-impl TransportBackend for NativeTlsBackend {
-    fn create_connector(
-        &self,
-        config: &ConnectorConfig,
-        addr: String,
-        domain: &str,
-    ) -> Result<Arc<dyn Connector>> {
+impl NativeTlsBackend {
+    /// Builds the shared native-tls [`TlsConnector`] once, so it can be reused
+    /// across a cluster's endpoints.
+    fn build_config(config: &ConnectorConfig) -> Result<TlsConnector> {
         let mut bld = TlsConnector::builder();
         if !config.root_certs.is_empty() {
             // If root CAs have been provided, disable system roots
@@ -40,15 +37,50 @@ impl TransportBackend for NativeTlsBackend {
             bld.identity(Identity::from_pkcs8(cert, key)?);
         }
         bld.min_protocol_version(Some(Protocol::Tlsv12));
+        Ok(bld.build()?)
+    }
+}
 
+impl TransportBackend for NativeTlsBackend {
+    fn create_connector(
+        &self,
+        config: &ConnectorConfig,
+        addr: String,
+        domain: &str,
+    ) -> Result<Arc<dyn Connector>> {
         Ok(Arc::new(NativeTlsConnector::new(
-            bld.build()?,
+            Self::build_config(config)?,
             addr,
             domain,
+            config.connect_timeout,
             config.read_timeout,
             config.write_timeout,
             config.tcp_nodelay,
         )))
+    }
+
+    fn create_connectors(
+        &self,
+        config: &ConnectorConfig,
+        endpoints: &[(String, String)],
+    ) -> Result<Vec<Arc<dyn Connector>>> {
+        // `TlsConnector` is a cheap, ref-counted handle: build it once and clone
+        // it into each endpoint's connector.
+        let cfg = Self::build_config(config)?;
+        Ok(endpoints
+            .iter()
+            .map(|(addr, domain)| {
+                Arc::new(NativeTlsConnector::new(
+                    cfg.clone(),
+                    addr.clone(),
+                    domain.clone(),
+                    config.connect_timeout,
+                    config.read_timeout,
+                    config.write_timeout,
+                    config.tcp_nodelay,
+                )) as Arc<dyn Connector>
+            })
+            .collect())
     }
 }
 
@@ -56,6 +88,7 @@ pub struct NativeTlsConnector {
     inner: TlsConnector,
     domain: String,
     addr: String,
+    connect_timeout: Option<Duration>,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     tcp_nodelay: bool,
@@ -66,6 +99,7 @@ impl NativeTlsConnector {
         cfg: TlsConnector,
         addr: impl Into<String>,
         domain: impl Into<String>,
+        connect_timeout: Option<Duration>,
         read_timeout: Option<Duration>,
         write_timeout: Option<Duration>,
         tcp_nodelay: bool,
@@ -74,6 +108,7 @@ impl NativeTlsConnector {
             inner: cfg,
             domain: domain.into(),
             addr: addr.into(),
+            connect_timeout,
             read_timeout,
             write_timeout,
             tcp_nodelay,
@@ -85,6 +120,7 @@ impl Connector for NativeTlsConnector {
     fn connect(&self) -> Result<Box<dyn Transport>> {
         let sock = dial(
             self.addr.as_str(),
+            self.connect_timeout,
             self.read_timeout,
             self.write_timeout,
             self.tcp_nodelay,

@@ -11,7 +11,7 @@ use crate::{
 use std::{
     fs,
     io::{self, ErrorKind, Read, Write},
-    net::TcpStream,
+    net::{TcpStream, ToSocketAddrs},
     path::Path,
     sync::{Arc, OnceLock},
     time::Duration,
@@ -81,6 +81,9 @@ pub struct ConnectorConfig {
     /// Optional client certificate chain and private key (both PEM-encoded) used
     /// for TLS client authentication.
     pub identity: Option<(Vec<u8>, Vec<u8>)>,
+    /// TCP connect timeout applied per resolved address when dialing. `None`
+    /// uses the OS default.
+    pub connect_timeout: Option<Duration>,
     /// Read timeout applied to the `TcpStream` before the handshake. `None`
     /// disables it (reads block indefinitely).
     pub read_timeout: Option<Duration>,
@@ -98,6 +101,7 @@ impl Default for ConnectorConfig {
         Self {
             root_certs: Vec::new(),
             identity: None,
+            connect_timeout: None,
             read_timeout: DEFAULT_SOCKET_TIMEOUT,
             write_timeout: DEFAULT_SOCKET_TIMEOUT,
             tcp_nodelay: true,
@@ -112,6 +116,22 @@ pub trait TransportBackend: 'static + Send + Sync {
         addr: String,
         domain: &str,
     ) -> Result<Arc<dyn Connector>>;
+
+    /// Builds a connector for each `(addr, domain)` endpoint of a cluster.
+    ///
+    /// The default builds each independently via [`Self::create_connector`].
+    /// Backends override this to share expensive TLS state (parsed CA bundle /
+    /// client identity) across the pool instead of rebuilding it per endpoint.
+    fn create_connectors(
+        &self,
+        config: &ConnectorConfig,
+        endpoints: &[(String, String)],
+    ) -> Result<Vec<Arc<dyn Connector>>> {
+        endpoints
+            .iter()
+            .map(|(addr, domain)| self.create_connector(config, addr.clone(), domain))
+            .collect()
+    }
 }
 
 /// Configures how [`Client`] connections are opened (TLS backend, certificates,
@@ -129,9 +149,6 @@ pub struct ClientBuilder {
     // Transport-layer config handed to the TLS backend to build a connector.
     connector: ConnectorConfig,
     backend: Box<dyn TransportBackend>,
-    // Cluster-only policy, used by `connect_cluster` and ignored by `connect`.
-    retry_cooldown: Option<Duration>,
-    cluster_mode: ClusterMode,
     middlewares: Vec<Arc<dyn Middleware<crate::Error>>>,
     version: Option<ProtocolVersion>,
     // Protocol config forwarded onto the built `ClientConfig`. `None` for
@@ -155,8 +172,6 @@ impl ClientBuilder {
         Self {
             connector: ConnectorConfig::default(),
             backend: Box::new(backend),
-            retry_cooldown: None,
-            cluster_mode: ClusterMode::default(),
             middlewares: Vec::new(),
             version: None,
             supported_versions: None,
@@ -210,20 +225,12 @@ impl ClientBuilder {
         self
     }
 
-    /// Sets the per-endpoint cooldown window used by [`Self::connect_cluster`]:
-    /// after a failed dial, an endpoint is skipped for this duration before it
-    /// is dialed again. Has no effect on [`Self::connect`]. Defaults to 5s when
-    /// unset ([`DEFAULT_RETRY_COOLDOWN`]).
-    pub fn retry_cooldown(mut self, cooldown: Duration) -> Self {
-        self.retry_cooldown = Some(cooldown);
-        self
-    }
-
-    /// Selects how [`Self::connect_cluster`] picks endpoints:
-    /// [`ClusterMode::Failover`] (default) or [`ClusterMode::RoundRobin`] load
-    /// balancing. Has no effect on [`Self::connect`].
-    pub fn cluster_mode(mut self, mode: ClusterMode) -> Self {
-        self.cluster_mode = mode;
+    /// Sets the TCP connect timeout applied when opening each connection. `None`
+    /// (the default) uses the OS default, which for a dropped/black-holed host
+    /// can be well over a minute — set a bound when using
+    /// [`Self::connect_cluster`] so failover moves on quickly.
+    pub fn connect_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.connector.connect_timeout = timeout;
         self
     }
 
@@ -297,32 +304,34 @@ impl ClientBuilder {
     }
 
     /// Connects to a pool of KMIP endpoints with failover and optional load
-    /// balancing (see [`ClusterConnector`] / [`Self::cluster_mode`]), using the
-    /// configured transport backend for every endpoint.
+    /// balancing, using the configured transport backend for every endpoint. See
+    /// [`ClusterConfig`] for the endpoints, [`ClusterMode`], and cooldown.
     ///
-    /// Each entry in `addrs` is a `"host:port"` string, re-resolved on every
-    /// connection like [`Self::connect`]. All endpoints share the single SNI /
-    /// certificate `domain`: a cluster is one logical service, so whichever node
-    /// answers a given connection is validated against the same identity. The
-    /// per-endpoint cooldown is [`Self::retry_cooldown`] (default
-    /// [`DEFAULT_RETRY_COOLDOWN`]).
-    pub fn connect_cluster(
-        &self,
-        addrs: impl IntoIterator<Item = impl Into<String>>,
-        domain: &str,
-    ) -> Result<Client> {
-        let connectors = addrs
+    /// Each endpoint address is a `"host:port"` string, re-resolved on every
+    /// connection like [`Self::connect`].
+    ///
+    /// Note on retries: a mid-session reconnect (`roundtrip_ttlv` after an
+    /// unexpected EOF, or [`Client::try_clone`]) re-runs endpoint selection and
+    /// may land on a *different* node. A request re-sent after the peer closed
+    /// mid-exchange can therefore be re-executed on another node — for a
+    /// non-idempotent operation (e.g. `Create`/`Destroy`) that means a possible
+    /// duplicate side effect while the caller still sees success. Prefer
+    /// idempotent operations, or a single-endpoint [`Self::connect`], where that
+    /// matters.
+    pub fn connect_cluster(&self, config: ClusterConfig) -> Result<Client> {
+        let ClusterConfig {
+            endpoints,
+            mode,
+            cooldown,
+        } = config;
+        let connectors = self
+            .backend
+            .create_connectors(&self.connector, &endpoints)?;
+        let labelled = endpoints
             .into_iter()
-            .map(|addr| {
-                self.backend
-                    .create_connector(&self.connector, addr.into(), domain)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let cluster = ClusterConnector::with_mode(
-            connectors,
-            self.retry_cooldown.unwrap_or(DEFAULT_RETRY_COOLDOWN),
-            self.cluster_mode,
-        )?;
+            .map(|(addr, _domain)| addr)
+            .zip(connectors);
+        let cluster = ClusterConnector::with_mode(labelled, cooldown, mode)?;
         self.build_with_connector(Arc::new(cluster)).connect()
     }
 
@@ -345,13 +354,43 @@ fn configure_stream(
 /// Opens a TCP connection to `addr` (a `"host:port"` string, re-resolved on
 /// every call) and applies the shared socket options. Used by every TLS
 /// backend to dial the server before running its handshake.
+///
+/// With `connect_timeout` set, each resolved address is tried with a bounded
+/// [`TcpStream::connect_timeout`] so a black-holed host does not block for the
+/// OS default (which can exceed a minute). The bound is *per resolved address*:
+/// a host that resolves to N addresses (e.g. a dual-stack IPv4/IPv6 name) can
+/// take up to N × `connect_timeout` before `dial` gives up, but each address
+/// gets a full budget so a black-holed one does not consume another's. `None`
+/// uses the OS default.
 pub(crate) fn dial(
     addr: &str,
+    connect_timeout: Option<Duration>,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     tcp_nodelay: bool,
 ) -> io::Result<TcpStream> {
-    let stream = TcpStream::connect(addr)?;
+    let stream = match connect_timeout {
+        Some(timeout) => {
+            let mut last_err = None;
+            addr.to_socket_addrs()?
+                .find_map(|sa| match TcpStream::connect_timeout(&sa, timeout) {
+                    Ok(stream) => Some(stream),
+                    Err(e) => {
+                        last_err = Some(e);
+                        None
+                    }
+                })
+                .ok_or_else(|| {
+                    last_err.unwrap_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("no addresses resolved for {addr}"),
+                        )
+                    })
+                })?
+        }
+        None => TcpStream::connect(addr)?,
+    };
     configure_stream(&stream, read_timeout, write_timeout, tcp_nodelay)?;
     Ok(stream)
 }
@@ -460,10 +499,14 @@ impl Client {
     /// middleware chain, and supported-version list are shared cheaply via
     /// `Arc` (the whole client configuration is cloned by a few refcount bumps).
     ///
-    /// The negotiated protocol version is also carried over. Clones are
-    /// expected to talk to the same server as the source client. If the
-    /// connector resolves to a different host on reconnect, the cached
-    /// version may not match what that host actually supports.
+    /// The negotiated protocol version is carried over and **not** renegotiated.
+    /// A single-endpoint client reconnects to the same server, so this holds. A
+    /// clustered client (see [`ClientBuilder::connect_cluster`]) may open the
+    /// clone — and later reconnects — on a *different* node
+    /// ([`ClusterMode::RoundRobin`] always rotates; [`ClusterMode::Failover`]
+    /// re-prefers a recovered leader), so on a version-skewed cluster (e.g. a
+    /// rolling upgrade) the cached version can be one the new node does not
+    /// support. Keep cluster nodes on a common protocol version.
     pub fn try_clone(&self) -> Result<Self> {
         self.config.connect()
     }
@@ -702,19 +745,36 @@ mod tests {
             Some(Duration::from_secs(30))
         );
         assert!(builder.connector.tcp_nodelay);
-        assert_eq!(builder.retry_cooldown, None);
-        assert_eq!(builder.cluster_mode, ClusterMode::Failover);
+        assert_eq!(builder.connector.connect_timeout, None);
     }
 
     #[cfg(feature = "default-tls-rustls")]
     #[test]
-    fn test_client_builder_cluster_options() {
-        let builder = Client::builder()
-            .retry_cooldown(Duration::from_secs(2))
-            .cluster_mode(ClusterMode::RoundRobin);
+    fn test_client_builder_connect_timeout() {
+        let builder = Client::builder().connect_timeout(Some(Duration::from_secs(3)));
+        assert_eq!(
+            builder.connector.connect_timeout,
+            Some(Duration::from_secs(3))
+        );
+    }
 
-        assert_eq!(builder.retry_cooldown, Some(Duration::from_secs(2)));
-        assert_eq!(builder.cluster_mode, ClusterMode::RoundRobin);
+    #[test]
+    fn cluster_config_defaults_and_builders() {
+        let cfg = ClusterConfig::with_shared_domain(["a:5696", "b:5696"], "kms.example.com");
+        assert_eq!(cfg.endpoints.len(), 2);
+        assert_eq!(
+            cfg.endpoints[0],
+            ("a:5696".to_string(), "kms.example.com".to_string())
+        );
+        assert_eq!(cfg.mode, ClusterMode::Failover);
+        assert_eq!(cfg.cooldown, DEFAULT_RETRY_COOLDOWN);
+
+        let cfg = ClusterConfig::with_endpoints([("a:5696", "n1"), ("b:5696", "n2")])
+            .mode(ClusterMode::RoundRobin)
+            .cooldown(Duration::from_secs(2));
+        assert_eq!(cfg.endpoints[1], ("b:5696".to_string(), "n2".to_string()));
+        assert_eq!(cfg.mode, ClusterMode::RoundRobin);
+        assert_eq!(cfg.cooldown, Duration::from_secs(2));
     }
 
     #[cfg(feature = "default-tls-rustls")]
