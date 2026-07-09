@@ -68,7 +68,7 @@ cfg_eval = { version = "0.1", optional = true }
 
 rsa = { version = "0.9", default-features = false, features = ["std"], optional = true }
 p256 = { version = "0.13", default-features = false, features = ["arithmetic", "pkcs8"], optional = true }
-p384 = { version = "0.13", default-features = false, features = ["arithmetic", "pkcs8"], optional = true }
+p384 = { version = "0.14", default-features = false, features = ["arithmetic", "pkcs8"], optional = true }
 p521 = { version = "0.13", default-features = false, features = ["arithmetic", "pkcs8"], optional = true }
 elliptic-curve = { version = "0.13", default-features = false, features = ["std", "pkcs8", "sec1", "arithmetic"], optional = true }
 pkcs8 = { version = "0.10", default-features = false, optional = true }
