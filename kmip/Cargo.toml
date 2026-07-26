@@ -72,7 +72,7 @@ p384 = { version = "0.13", default-features = false, features = ["arithmetic", "
 p521 = { version = "0.13", default-features = false, features = ["arithmetic", "pkcs8"], optional = true }
 elliptic-curve = { version = "0.13", default-features = false, features = ["std", "pkcs8", "sec1", "arithmetic"], optional = true }
 pkcs8 = { version = "0.10", default-features = false, optional = true }
-sec1 = { version = "0.7", default-features = false, optional = true }
+sec1 = { version = "0.8", default-features = false, optional = true }
 
 [dev-dependencies]
 # kmip = { path = ".", features = ["interop-rust-crypto"] }
