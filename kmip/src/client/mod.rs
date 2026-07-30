@@ -11,7 +11,7 @@ use crate::{
 use std::{
     fs,
     io::{self, ErrorKind, Read, Write},
-    net::TcpStream,
+    net::{TcpStream, ToSocketAddrs},
     path::Path,
     sync::Arc,
     time::Duration,
@@ -22,6 +22,9 @@ use ttlv::{Decodable, Encodable};
 
 mod batch;
 pub use batch::*;
+
+mod cluster;
+pub use cluster::*;
 
 pub mod exec;
 
@@ -62,12 +65,29 @@ pub trait TlsBackend: 'static + Send + Sync {
         addr: String,
         domain: &str,
     ) -> Result<Arc<dyn Connector>>;
+
+    /// Builds a connector for each `(addr, domain)` endpoint of a cluster.
+    ///
+    /// The default builds each independently via [`Self::create_connector`].
+    /// Backends override this to share expensive TLS state (parsed CA bundle /
+    /// client identity) across the pool instead of rebuilding it per endpoint.
+    fn create_connectors(
+        &self,
+        builder: &ClientBuilder,
+        endpoints: &[(String, String)],
+    ) -> Result<Vec<Arc<dyn Connector>>> {
+        endpoints
+            .iter()
+            .map(|(addr, domain)| self.create_connector(builder, addr.clone(), domain))
+            .collect()
+    }
 }
 
 #[must_use = "builder must be used to create a Client"]
 pub struct ClientBuilder {
     root_certs: Vec<Vec<u8>>,
     identity: Option<(Vec<u8>, Vec<u8>)>,
+    connect_timeout: Option<Duration>,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     tcp_nodelay: bool,
@@ -86,6 +106,7 @@ impl ClientBuilder {
         Self {
             root_certs: Vec::new(),
             identity: None,
+            connect_timeout: None,
             read_timeout: DEFAULT_SOCKET_TIMEOUT,
             write_timeout: DEFAULT_SOCKET_TIMEOUT,
             tcp_nodelay: true,
@@ -140,6 +161,15 @@ impl ClientBuilder {
         self
     }
 
+    /// Sets the TCP connect timeout applied when opening each connection. `None`
+    /// (the default) uses the OS default, which for a dropped/black-holed host
+    /// can be well over a minute — set a bound when using
+    /// [`Self::connect_cluster`] so failover moves on quickly.
+    pub fn connect_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.connect_timeout = timeout;
+        self
+    }
+
     /// Connects to the KMIP server at `addr` (a `"host:port"` string),
     /// performing the TLS handshake with `domain` as the SNI hostname.
     ///
@@ -154,6 +184,36 @@ impl ClientBuilder {
             .tls_backend
             .create_connector(&self, addr.into(), domain)?;
         Client::new(connector)
+    }
+
+    /// Connects to a pool of KMIP endpoints with failover and optional load
+    /// balancing, using the configured [`TlsBackend`] for every endpoint. See
+    /// [`ClusterConfig`] for the endpoints, [`ClusterMode`], and cooldown.
+    ///
+    /// Each endpoint address is a `"host:port"` string, re-resolved on every
+    /// connection like [`Self::connect`].
+    ///
+    /// Note on retries: a mid-session reconnect (`roundtrip_ttlv` after an
+    /// unexpected EOF, or [`Client::try_clone`]) re-runs endpoint selection and
+    /// may land on a *different* node. A request re-sent after the peer closed
+    /// mid-exchange can therefore be re-executed on another node — for a
+    /// non-idempotent operation (e.g. `Create`/`Destroy`) that means a possible
+    /// duplicate side effect while the caller still sees success. Prefer
+    /// idempotent operations, or a single-endpoint [`Self::connect`], where that
+    /// matters.
+    pub fn connect_cluster(self, config: ClusterConfig) -> Result<Client> {
+        let ClusterConfig {
+            endpoints,
+            mode,
+            cooldown,
+        } = config;
+        let connectors = self.tls_backend.create_connectors(&self, &endpoints)?;
+        let labelled = endpoints
+            .into_iter()
+            .map(|(addr, _domain)| addr)
+            .zip(connectors);
+        let cluster = ClusterConnector::with_mode(labelled, cooldown, mode)?;
+        Client::new(Arc::new(cluster))
     }
 
     // TODO: Add KMIP authentication
@@ -175,13 +235,43 @@ fn configure_stream(
 /// Opens a TCP connection to `addr` (a `"host:port"` string, re-resolved on
 /// every call) and applies the shared socket options. Used by every TLS
 /// backend to dial the server before running its handshake.
+///
+/// With `connect_timeout` set, each resolved address is tried with a bounded
+/// [`TcpStream::connect_timeout`] so a black-holed host does not block for the
+/// OS default (which can exceed a minute). The bound is *per resolved address*:
+/// a host that resolves to N addresses (e.g. a dual-stack IPv4/IPv6 name) can
+/// take up to N × `connect_timeout` before `dial` gives up, but each address
+/// gets a full budget so a black-holed one does not consume another's. `None`
+/// uses the OS default.
 pub(crate) fn dial(
     addr: &str,
+    connect_timeout: Option<Duration>,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     tcp_nodelay: bool,
 ) -> io::Result<TcpStream> {
-    let stream = TcpStream::connect(addr)?;
+    let stream = match connect_timeout {
+        Some(timeout) => {
+            let mut last_err = None;
+            addr.to_socket_addrs()?
+                .find_map(|sa| match TcpStream::connect_timeout(&sa, timeout) {
+                    Ok(stream) => Some(stream),
+                    Err(e) => {
+                        last_err = Some(e);
+                        None
+                    }
+                })
+                .ok_or_else(|| {
+                    last_err.unwrap_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("no addresses resolved for {addr}"),
+                        )
+                    })
+                })?
+        }
+        None => TcpStream::connect(addr)?,
+    };
     configure_stream(&stream, read_timeout, write_timeout, tcp_nodelay)?;
     Ok(stream)
 }
@@ -232,10 +322,14 @@ impl Client {
     /// subsequent builder calls like [`Self::with_middleware`] on the clone
     /// diverge via copy-on-write and do not affect the original.
     ///
-    /// The negotiated protocol version is also carried over. Clones are
-    /// expected to talk to the same server as the source client — if the
-    /// connector resolves to a different host on reconnect, the cached
-    /// version may not match what that host actually supports.
+    /// The negotiated protocol version is carried over and **not** renegotiated.
+    /// A single-endpoint client reconnects to the same server, so this holds. A
+    /// clustered client (see [`ClientBuilder::connect_cluster`]) may open the
+    /// clone — and later reconnects — on a *different* node
+    /// ([`ClusterMode::RoundRobin`] always rotates; [`ClusterMode::Failover`]
+    /// re-prefers a recovered leader), so on a version-skewed cluster (e.g. a
+    /// rolling upgrade) the cached version can be one the new node does not
+    /// support. Keep cluster nodes on a common protocol version.
     pub fn try_clone(&self) -> Result<Self> {
         Ok(Self {
             conn: ttlv::Stream::new(self.connector.connect()?),
@@ -439,9 +533,36 @@ mod tests {
     #[test]
     fn test_client_builder_defaults() {
         let builder = ClientBuilder::default();
+        assert_eq!(builder.connect_timeout, None);
         assert_eq!(builder.read_timeout, Some(Duration::from_secs(30)));
         assert_eq!(builder.write_timeout, Some(Duration::from_secs(30)));
         assert!(builder.tcp_nodelay);
+    }
+
+    #[cfg(feature = "default-tls-rustls")]
+    #[test]
+    fn test_client_builder_connect_timeout() {
+        let builder = ClientBuilder::default().connect_timeout(Some(Duration::from_secs(3)));
+        assert_eq!(builder.connect_timeout, Some(Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn cluster_config_defaults_and_builders() {
+        let cfg = ClusterConfig::with_shared_domain(["a:5696", "b:5696"], "kms.example.com");
+        assert_eq!(cfg.endpoints.len(), 2);
+        assert_eq!(
+            cfg.endpoints[0],
+            ("a:5696".to_string(), "kms.example.com".to_string())
+        );
+        assert_eq!(cfg.mode, ClusterMode::Failover);
+        assert_eq!(cfg.cooldown, DEFAULT_RETRY_COOLDOWN);
+
+        let cfg = ClusterConfig::with_endpoints([("a:5696", "n1"), ("b:5696", "n2")])
+            .mode(ClusterMode::RoundRobin)
+            .cooldown(Duration::from_secs(2));
+        assert_eq!(cfg.endpoints[1], ("b:5696".to_string(), "n2".to_string()));
+        assert_eq!(cfg.mode, ClusterMode::RoundRobin);
+        assert_eq!(cfg.cooldown, Duration::from_secs(2));
     }
 
     #[cfg(feature = "default-tls-rustls")]

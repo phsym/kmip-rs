@@ -12,13 +12,10 @@ use super::{ClientBuilder, Connector, TlsBackend, Transport, dial};
 
 pub struct BoringBackend;
 
-impl TlsBackend for BoringBackend {
-    fn create_connector(
-        &self,
-        builder: &ClientBuilder,
-        addr: String,
-        domain: &str,
-    ) -> Result<Arc<dyn Connector>> {
+impl BoringBackend {
+    /// Builds the shared boring [`SslConnector`] once, so it can be reused
+    /// across a cluster's endpoints.
+    fn build_config(builder: &ClientBuilder) -> Result<SslConnector> {
         let mut bld = SslConnector::builder(SslMethod::tls())?;
         bld.set_min_proto_version(Some(SslVersion::TLS1_2))?;
 
@@ -55,14 +52,50 @@ impl TlsBackend for BoringBackend {
         }
 
         bld.set_verify(SslVerifyMode::PEER);
+        Ok(bld.build())
+    }
+}
+
+impl TlsBackend for BoringBackend {
+    fn create_connector(
+        &self,
+        builder: &ClientBuilder,
+        addr: String,
+        domain: &str,
+    ) -> Result<Arc<dyn Connector>> {
         Ok(Arc::new(BoringSslConnector::new(
-            bld.build(),
+            Self::build_config(builder)?,
             addr,
             domain,
+            builder.connect_timeout,
             builder.read_timeout,
             builder.write_timeout,
             builder.tcp_nodelay,
         )))
+    }
+
+    fn create_connectors(
+        &self,
+        builder: &ClientBuilder,
+        endpoints: &[(String, String)],
+    ) -> Result<Vec<Arc<dyn Connector>>> {
+        // `SslConnector` is a cheap, ref-counted handle: build it once and clone
+        // it into each endpoint's connector.
+        let cfg = Self::build_config(builder)?;
+        Ok(endpoints
+            .iter()
+            .map(|(addr, domain)| {
+                Arc::new(BoringSslConnector::new(
+                    cfg.clone(),
+                    addr.clone(),
+                    domain.clone(),
+                    builder.connect_timeout,
+                    builder.read_timeout,
+                    builder.write_timeout,
+                    builder.tcp_nodelay,
+                )) as Arc<dyn Connector>
+            })
+            .collect())
     }
 }
 
@@ -70,6 +103,7 @@ pub struct BoringSslConnector {
     inner: SslConnector,
     domain: String,
     addr: String,
+    connect_timeout: Option<Duration>,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     tcp_nodelay: bool,
@@ -80,6 +114,7 @@ impl BoringSslConnector {
         cfg: SslConnector,
         addr: impl Into<String>,
         domain: impl Into<String>,
+        connect_timeout: Option<Duration>,
         read_timeout: Option<Duration>,
         write_timeout: Option<Duration>,
         tcp_nodelay: bool,
@@ -88,6 +123,7 @@ impl BoringSslConnector {
             inner: cfg,
             domain: domain.into(),
             addr: addr.into(),
+            connect_timeout,
             read_timeout,
             write_timeout,
             tcp_nodelay,
@@ -99,6 +135,7 @@ impl Connector for BoringSslConnector {
     fn connect(&self) -> Result<Box<dyn Transport>> {
         let sock = dial(
             self.addr.as_str(),
+            self.connect_timeout,
             self.read_timeout,
             self.write_timeout,
             self.tcp_nodelay,

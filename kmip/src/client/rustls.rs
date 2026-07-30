@@ -18,6 +18,7 @@ pub struct RustlsConnector {
     cfg: Arc<ClientConfig>,
     domain: String,
     addr: String,
+    connect_timeout: Option<Duration>,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     tcp_nodelay: bool,
@@ -28,14 +29,38 @@ impl RustlsConnector {
         cfg: ClientConfig,
         addr: impl Into<String>,
         domain: impl Into<String>,
+        connect_timeout: Option<Duration>,
+        read_timeout: Option<Duration>,
+        write_timeout: Option<Duration>,
+        tcp_nodelay: bool,
+    ) -> Self {
+        Self::from_shared(
+            Arc::new(cfg),
+            addr,
+            domain,
+            connect_timeout,
+            read_timeout,
+            write_timeout,
+            tcp_nodelay,
+        )
+    }
+
+    /// Builds a connector reusing an already-shared [`ClientConfig`], so a
+    /// cluster pool can share one parsed config instead of one per endpoint.
+    fn from_shared(
+        cfg: Arc<ClientConfig>,
+        addr: impl Into<String>,
+        domain: impl Into<String>,
+        connect_timeout: Option<Duration>,
         read_timeout: Option<Duration>,
         write_timeout: Option<Duration>,
         tcp_nodelay: bool,
     ) -> Self {
         Self {
-            cfg: Arc::new(cfg),
+            cfg,
             domain: domain.into(),
             addr: addr.into(),
+            connect_timeout,
             read_timeout,
             write_timeout,
             tcp_nodelay,
@@ -54,6 +79,7 @@ impl Connector for RustlsConnector {
         )?;
         let mut sock = dial(
             self.addr.as_str(),
+            self.connect_timeout,
             self.read_timeout,
             self.write_timeout,
             self.tcp_nodelay,
@@ -67,13 +93,10 @@ impl Connector for RustlsConnector {
 
 pub struct RustlsBackend;
 
-impl TlsBackend for RustlsBackend {
-    fn create_connector(
-        &self,
-        builder: &ClientBuilder,
-        addr: String,
-        domain: &str,
-    ) -> Result<Arc<dyn Connector>> {
+impl RustlsBackend {
+    /// Builds the shared rustls [`ClientConfig`] (parsed CA roots + client
+    /// identity) once, so it can be reused across a cluster's endpoints.
+    fn build_config(builder: &ClientBuilder) -> Result<Arc<ClientConfig>> {
         let cfg = if !builder.root_certs.is_empty() {
             let mut root_store = RootCertStore::empty();
             for root in &builder.root_certs {
@@ -102,14 +125,51 @@ impl TlsBackend for RustlsBackend {
         } else {
             cfg.with_no_client_auth()
         };
-        Ok(Arc::new(RustlsConnector::new(
+        Ok(Arc::new(cfg))
+    }
+}
+
+impl TlsBackend for RustlsBackend {
+    fn create_connector(
+        &self,
+        builder: &ClientBuilder,
+        addr: String,
+        domain: &str,
+    ) -> Result<Arc<dyn Connector>> {
+        let cfg = Self::build_config(builder)?;
+        Ok(Arc::new(RustlsConnector::from_shared(
             cfg,
             addr,
             domain,
+            builder.connect_timeout,
             builder.read_timeout,
             builder.write_timeout,
             builder.tcp_nodelay,
         )))
+    }
+
+    fn create_connectors(
+        &self,
+        builder: &ClientBuilder,
+        endpoints: &[(String, String)],
+    ) -> Result<Vec<Arc<dyn Connector>>> {
+        // Parse the CA bundle + identity once and share the resulting config
+        // across every endpoint's connector.
+        let cfg = Self::build_config(builder)?;
+        Ok(endpoints
+            .iter()
+            .map(|(addr, domain)| {
+                Arc::new(RustlsConnector::from_shared(
+                    cfg.clone(),
+                    addr.clone(),
+                    domain.clone(),
+                    builder.connect_timeout,
+                    builder.read_timeout,
+                    builder.write_timeout,
+                    builder.tcp_nodelay,
+                )) as Arc<dyn Connector>
+            })
+            .collect())
     }
 }
 

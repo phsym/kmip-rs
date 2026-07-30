@@ -30,6 +30,8 @@ pub enum Error {
     UnexpectedRequestPayload { want: &'static str },
     #[error(transparent)]
     UnexpectedObject(#[from] UnexpectedObject),
+    #[error("no cluster endpoint could be reached: {0}")]
+    ClusterUnavailable(String),
 }
 
 #[cfg(feature = "tls-rustls")]
