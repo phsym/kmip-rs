@@ -4,30 +4,30 @@ use native_tls::{Certificate, Identity, Protocol, TlsConnector};
 
 use crate::Result;
 
-use super::{ClientBuilder, Connector, TlsBackend, Transport, dial};
+use super::{Connector, ConnectorConfig, Transport, TransportBackend, dial};
 
 /// TLS backend delegating to the OS implementation via native-tls.
 ///
 /// Unlike the other backends, the client identity private key passed to
-/// [`ClientBuilder::identity`] must be PKCS#8-encoded
+/// [`ClientBuilder::identity`](super::ClientBuilder::identity) must be PKCS#8-encoded
 /// (`-----BEGIN PRIVATE KEY-----`); PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`)
 /// and SEC1 (`-----BEGIN EC PRIVATE KEY-----`) keys are rejected. Convert with
 /// `openssl pkcs8 -topk8 -nocrypt` if needed.
 pub struct NativeTlsBackend;
 
-impl TlsBackend for NativeTlsBackend {
+impl TransportBackend for NativeTlsBackend {
     fn create_connector(
         &self,
-        builder: &ClientBuilder,
+        config: &ConnectorConfig,
         addr: String,
         domain: &str,
     ) -> Result<Arc<dyn Connector>> {
         let mut bld = TlsConnector::builder();
-        if !builder.root_certs.is_empty() {
+        if !config.root_certs.is_empty() {
             // If root CAs have been provided, disable system roots
             bld.disable_built_in_roots(true);
         }
-        for root in &builder.root_certs {
+        for root in &config.root_certs {
             let certs = Certificate::stack_from_pem(root)?;
             if certs.is_empty() {
                 return Err(crate::Error::TLS("No valid root certificates found".into()));
@@ -36,7 +36,7 @@ impl TlsBackend for NativeTlsBackend {
                 bld.add_root_certificate(cert);
             }
         }
-        if let Some((cert, key)) = &builder.identity {
+        if let Some((cert, key)) = &config.identity {
             bld.identity(Identity::from_pkcs8(cert, key)?);
         }
         bld.min_protocol_version(Some(Protocol::Tlsv12));
@@ -45,9 +45,9 @@ impl TlsBackend for NativeTlsBackend {
             bld.build()?,
             addr,
             domain,
-            builder.read_timeout,
-            builder.write_timeout,
-            builder.tcp_nodelay,
+            config.read_timeout,
+            config.write_timeout,
+            config.tcp_nodelay,
         )))
     }
 }
@@ -96,7 +96,7 @@ impl Connector for NativeTlsConnector {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClientBuilder, NativeTlsBackend, TlsBackend};
+    use super::{ConnectorConfig, NativeTlsBackend, TransportBackend};
 
     const VALID: &str = include_str!("../../tests/pykmip/root_certificate.pem");
     // A CERTIFICATE block whose base64 decodes cleanly but is not valid DER.
@@ -106,8 +106,7 @@ mod tests {
     // outright, consistently with the other backends.
     #[test]
     fn rejects_bundle_with_malformed_certificate() {
-        let good =
-            ClientBuilder::new(NativeTlsBackend).add_root_certificate(VALID.as_bytes().to_vec());
+        let good = ConnectorConfig::with_root(VALID.as_bytes().to_vec());
         assert!(
             NativeTlsBackend
                 .create_connector(&good, "kmip.invalid:5696".to_string(), "kmip.invalid")
@@ -115,8 +114,7 @@ mod tests {
             "a valid CA certificate should be accepted",
         );
 
-        let mixed = ClientBuilder::new(NativeTlsBackend)
-            .add_root_certificate(format!("{VALID}\n{CORRUPT}").into_bytes());
+        let mixed = ConnectorConfig::with_root(format!("{VALID}\n{CORRUPT}").into_bytes());
         assert!(
             NativeTlsBackend
                 .create_connector(&mixed, "kmip.invalid:5696".to_string(), "kmip.invalid")

@@ -8,27 +8,27 @@ use openssl::{
 
 use crate::{Error, Result};
 
-use super::{ClientBuilder, Connector, TlsBackend, Transport, dial};
+use super::{Connector, ConnectorConfig, Transport, TransportBackend, dial};
 
 pub struct OpenSslBackend;
 
-impl TlsBackend for OpenSslBackend {
+impl TransportBackend for OpenSslBackend {
     fn create_connector(
         &self,
-        builder: &ClientBuilder,
+        config: &ConnectorConfig,
         addr: String,
         domain: &str,
     ) -> Result<Arc<dyn Connector>> {
         let mut bld = SslConnector::builder(SslMethod::tls_client())?;
         bld.set_min_proto_version(Some(SslVersion::TLS1_2))?;
 
-        if !builder.root_certs.is_empty() {
+        if !config.root_certs.is_empty() {
             // User-supplied CAs replace the system roots. Build the store fully
             // before installing it — mirroring the boring backend and avoiding a
             // post-install `cert_store_mut()` mutation. (openssl has no
             // `set_cert_store_builder`, so install the built store directly.)
             let mut store = X509StoreBuilder::new()?;
-            for root in &builder.root_certs {
+            for root in &config.root_certs {
                 let certs = X509::stack_from_pem(root)?;
                 if certs.is_empty() {
                     return Err(Error::TLS("No valid root certificates found".into()));
@@ -40,7 +40,7 @@ impl TlsBackend for OpenSslBackend {
             bld.set_cert_store(store.build());
         }
 
-        if let Some((cert, key)) = &builder.identity {
+        if let Some((cert, key)) = &config.identity {
             let mut certs = X509::stack_from_pem(cert)?.into_iter();
             bld.set_certificate(
                 certs
@@ -59,9 +59,9 @@ impl TlsBackend for OpenSslBackend {
             bld.build(),
             addr,
             domain,
-            builder.read_timeout,
-            builder.write_timeout,
-            builder.tcp_nodelay,
+            config.read_timeout,
+            config.write_timeout,
+            config.tcp_nodelay,
         )))
     }
 }
@@ -111,7 +111,7 @@ impl Connector for OpenSslConnector {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClientBuilder, OpenSslBackend, TlsBackend};
+    use super::{ConnectorConfig, OpenSslBackend, TransportBackend};
 
     const VALID: &str = include_str!("../../tests/pykmip/root_certificate.pem");
     // A CERTIFICATE block whose base64 decodes cleanly but is not valid DER.
@@ -121,8 +121,7 @@ mod tests {
     // outright, consistently with the other backends.
     #[test]
     fn rejects_bundle_with_malformed_certificate() {
-        let good =
-            ClientBuilder::new(OpenSslBackend).add_root_certificate(VALID.as_bytes().to_vec());
+        let good = ConnectorConfig::with_root(VALID.as_bytes().to_vec());
         assert!(
             OpenSslBackend
                 .create_connector(&good, "kmip.invalid:5696".to_string(), "kmip.invalid")
@@ -130,8 +129,7 @@ mod tests {
             "a valid CA certificate should be accepted",
         );
 
-        let mixed = ClientBuilder::new(OpenSslBackend)
-            .add_root_certificate(format!("{VALID}\n{CORRUPT}").into_bytes());
+        let mixed = ConnectorConfig::with_root(format!("{VALID}\n{CORRUPT}").into_bytes());
         assert!(
             OpenSslBackend
                 .create_connector(&mixed, "kmip.invalid:5696".to_string(), "kmip.invalid")

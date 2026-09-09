@@ -1,4 +1,3 @@
-use core::str;
 use std::{sync::Arc, time::Duration};
 
 use rustls::{
@@ -12,7 +11,7 @@ use rustls_platform_verifier::BuilderVerifierExt;
 
 use crate::{Error, Result};
 
-use super::{ClientBuilder, Connector, TlsBackend, Transport, dial};
+use super::{Connector, ConnectorConfig, Transport, TransportBackend, dial};
 
 pub struct RustlsConnector {
     cfg: Arc<ClientConfig>,
@@ -67,16 +66,16 @@ impl Connector for RustlsConnector {
 
 pub struct RustlsBackend;
 
-impl TlsBackend for RustlsBackend {
+impl TransportBackend for RustlsBackend {
     fn create_connector(
         &self,
-        builder: &ClientBuilder,
+        config: &ConnectorConfig,
         addr: String,
         domain: &str,
     ) -> Result<Arc<dyn Connector>> {
-        let cfg = if !builder.root_certs.is_empty() {
+        let cfg = if !config.root_certs.is_empty() {
             let mut root_store = RootCertStore::empty();
-            for root in &builder.root_certs {
+            for root in &config.root_certs {
                 let ca = pem::SliceIter::new(root).collect::<std::result::Result<Vec<_>, _>>()?;
                 let mut n = 0;
                 for cert in ca {
@@ -94,7 +93,7 @@ impl TlsBackend for RustlsBackend {
             ClientConfig::builder().with_platform_verifier()?
         };
 
-        let cfg = if let Some((cert, key)) = &builder.identity {
+        let cfg = if let Some((cert, key)) = &config.identity {
             let cert_chain =
                 pem::SliceIter::new(cert).collect::<std::result::Result<Vec<_>, _>>()?;
             let key_der = PrivateKeyDer::from_pem_slice(key)?;
@@ -106,16 +105,16 @@ impl TlsBackend for RustlsBackend {
             cfg,
             addr,
             domain,
-            builder.read_timeout,
-            builder.write_timeout,
-            builder.tcp_nodelay,
+            config.read_timeout,
+            config.write_timeout,
+            config.tcp_nodelay,
         )))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ClientBuilder, RustlsBackend, TlsBackend};
+    use super::{ConnectorConfig, RustlsBackend, TransportBackend};
 
     const VALID: &str = include_str!("../../tests/pykmip/root_certificate.pem");
     // A CERTIFICATE block whose base64 decodes cleanly but is not valid DER.
@@ -126,8 +125,7 @@ mod tests {
     // (regression for the previous add_parsable_certificates leniency).
     #[test]
     fn rejects_bundle_with_malformed_certificate() {
-        let good =
-            ClientBuilder::new(RustlsBackend).add_root_certificate(VALID.as_bytes().to_vec());
+        let good = ConnectorConfig::with_root(VALID.as_bytes().to_vec());
         assert!(
             RustlsBackend
                 .create_connector(&good, "kmip.invalid:5696".to_string(), "kmip.invalid")
@@ -135,8 +133,7 @@ mod tests {
             "a valid CA certificate should be accepted",
         );
 
-        let mixed = ClientBuilder::new(RustlsBackend)
-            .add_root_certificate(format!("{VALID}\n{CORRUPT}").into_bytes());
+        let mixed = ConnectorConfig::with_root(format!("{VALID}\n{CORRUPT}").into_bytes());
         assert!(
             RustlsBackend
                 .create_connector(&mixed, "kmip.invalid:5696".to_string(), "kmip.invalid")

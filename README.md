@@ -38,13 +38,13 @@ AES-256 symmetric key:
 use kmip::{
     CryptographicUsageMask,
     attributes::{Attribute, CryptographicLength},
-    client::ClientBuilder,
+    client::Client,
     enums::{CryptographicAlgorithm, ObjectType},
     payloads::CreateRequestPayload,
     types::TemplateAttribute,
 };
 
-let mut client = ClientBuilder::default()
+let mut client = Client::builder()
     .add_root_certificate_file("ca.pem").unwrap()
     .identity_file("client.pem", "client.key").unwrap()
     .connect("kmip.example.com:5696", "kmip.example.com").unwrap();
@@ -66,9 +66,9 @@ println!("created key: {:?}", response);
 The same operation written with the fluent helpers on `Client`:
 
 ```rust,no_run
-use kmip::{CryptographicUsageMask, client::ClientBuilder};
+use kmip::{CryptographicUsageMask, client::Client};
 
-let mut client = ClientBuilder::default()
+let mut client = Client::builder()
     .add_root_certificate_file("ca.pem").unwrap()
     .identity_file("client.pem", "client.key").unwrap()
     .connect("kmip.example.com:5696", "kmip.example.com").unwrap();
@@ -88,11 +88,49 @@ Each operation has a dedicated builder under [`client::exec`](kmip/src/client/ex
 `client.roundtrip(&msg)`. Protocol version is auto-negotiated against the
 server's `Discover Versions` response.
 
+## Connection pooling
+
+A `Client` owns a single connection, so concurrent callers each need their own.
+The optional `pool` feature (built on [`r2d2`](https://docs.rs/r2d2)) provides a
+bounded, thread-safe pool that hands out clients on demand:
+
+```toml
+kmip = { version = "*", features = ["pool"] }
+```
+
+```rust,ignore
+use kmip::client::Client;
+
+// `.pool(addr, domain)` finishes the transport setup (opening no connection yet)
+// and returns a pool builder; the final `.build()` opens the initial connections.
+let pool = Client::builder()
+    .add_root_certificate_file("ca.pem").unwrap()
+    .identity_file("client.pem", "client.key").unwrap()
+    .pool("kmip.example.com:5696", "kmip.example.com").unwrap()
+    .max_size(8)
+    .build().unwrap();
+
+// `ClientPool` is `Clone + Send + Sync`; share it across threads.
+let mut client = pool.get().unwrap(); // owned guard, derefs to `&mut Client`
+let response = client.create()
+    .aes(256, kmip::CryptographicUsageMask::Encrypt | kmip::CryptographicUsageMask::Decrypt)
+    .exec().unwrap();
+// The connection returns to the pool when `client` is dropped.
+```
+
+Sizing and timeouts (`max_size`, `min_idle`, `connection_timeout`,
+`idle_timeout`, `max_lifetime`, …) are set on the `ClientPoolBuilder`;
+`.configure(..)` exposes the raw `r2d2::Builder` for anything else (`r2d2` is
+re-exported as `kmip::client::r2d2`). Checkout validation is off by default
+since the client self-heals dropped connections. Enable it with
+`.test_on_check_out(true)`. Protocol settings (`with_middleware` / `with_version`
+/ `with_supported_versions`) go on the builder before `.pool()`.
+
 ## TLS backends
 
-The `kmip` crate compiles against several TLS implementations. All backends
-share a single `ClientBuilder::connect(addr, domain)` method; the backend is
-chosen by a `TlsBackend` implementation rather than a per-backend method.
+The `kmip` crate compiles against several TLS implementations. The backend is
+chosen by a `TransportBackend` implementation passed to `ClientBuilder::new`
+rather than a per-backend method.
 
 | Feature       | Backend type       | Notes                                                       |
 | ------------- | ------------------ | ----------------------------------------------------------- |
@@ -117,21 +155,22 @@ let mut client = ClientBuilder::new(RustlsBackend)
 ```
 
 The `default-tls-rustls` feature (on by default) selects rustls as the built-in
-default: it's what `ClientBuilder::default()` (used above) and `Client::builder()`
-construct. Both are only available when `default-tls-rustls` is enabled; with it
-disabled, use `ClientBuilder::new(backend)` to choose a backend explicitly.
+default: it's what `Client::builder()` (used above) constructs. That entry point
+is only available when `default-tls-rustls` is enabled; with it disabled, use
+`ClientBuilder::new(backend)` to choose a backend explicitly.
 
 Multiple backends can be enabled at once and selected per-client via
-`ClientBuilder::new`, with one exception: `tls-boring` and `tls-openssl` cannot
-be enabled together (they export conflicting symbols).
+`ClientBuilder::new`, with one exception: `tls-boring` and `tls-openssl`
+cannot be enabled together (they export conflicting symbols).
 
 ## Optional features
 
 | Feature               | Default | Effect                                                                        |
 | --------------------- | ------- | ----------------------------------------------------------------------------- |
 | `tls-rustls`          | yes     | Enables the rustls client backend (see above).                                |
-| `default-tls-rustls`  | yes     | Makes rustls the built-in default (`ClientBuilder::default()` / `Client::builder()`). |
+| `default-tls-rustls`  | yes     | Makes rustls the built-in default (enables `Client::builder()`). |
 | `uuid`                | yes     | Implements unique-identifier helpers using the `uuid` crate.                  |
+| `pool`                | no      | Connection pooling for the client via `r2d2` (see below).                     |
 | `serde`               | no      | Derives `serde::Serialize` on protocol types for logging/inspection.          |
 | `arbitrary`           | no      | Derives `arbitrary::Arbitrary` for fuzzing.                                   |
 | `interop-rust-crypto` | no      | Cryptographic interop using pure-Rust crates (`rsa`, `p256`, `p384`, `p521`). |
@@ -139,7 +178,7 @@ be enabled together (they export conflicting symbols).
 | `interop-boring`      | no      | Cryptographic interop using BoringSSL.                                        |
 
 The `ttlv` crate has its own feature flags (`xml`, `text`, `derive`, `chrono`,
-`serde`, `arbitrary`, `bitflags`), all opt-in (empty default set) — see
+`serde`, `arbitrary`, `bitflags`), all opt-in (empty default set). See
 [`ttlv/README.md`](ttlv/README.md#cargo-features). When using `kmip` you
 don't need to set them: `kmip` already enables the ttlv features it depends
 on.
