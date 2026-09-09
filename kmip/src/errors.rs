@@ -30,6 +30,12 @@ pub enum Error {
     UnexpectedRequestPayload { want: &'static str },
     #[error(transparent)]
     UnexpectedObject(#[from] UnexpectedObject),
+    #[cfg(feature = "pool")]
+    #[error("Connection pool error: {0}")]
+    Pool(#[from] r2d2::Error),
+    #[cfg(feature = "pool")]
+    #[error("Invalid connection pool configuration: {0}")]
+    PoolConfig(String),
 }
 
 #[cfg(feature = "tls-rustls")]

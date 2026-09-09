@@ -13,7 +13,7 @@ use std::{
     io::{self, ErrorKind, Read, Write},
     net::TcpStream,
     path::Path,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::Duration,
     vec::IntoIter,
 };
@@ -24,6 +24,11 @@ mod batch;
 pub use batch::*;
 
 pub mod exec;
+
+#[cfg(feature = "pool")]
+mod pool;
+#[cfg(feature = "pool")]
+pub use pool::*;
 
 #[cfg(feature = "tls-rustls")]
 mod rustls;
@@ -55,41 +60,98 @@ const DEFAULT_SUPPORTED_VERSIONS: &[ProtocolVersion] = &[
 
 const DEFAULT_SOCKET_TIMEOUT: Option<Duration> = Some(Duration::from_secs(30));
 
-pub trait TlsBackend: 'static + Send + Sync {
-    fn create_connector(
-        &self,
-        builder: &ClientBuilder,
-        addr: String,
-        domain: &str,
-    ) -> Result<Arc<dyn Connector>>;
+/// The transport-layer inputs a [`TransportBackend`] needs to build a [`Connector`]:
+/// the CA/root certificates and client identity used to authenticate the TLS
+/// session, plus the socket options applied to the underlying `TcpStream` before
+/// the handshake.
+///
+/// It carries no protocol-layer state (middleware, protocol versions) and no
+/// target address; the address is supplied per connection to
+/// [`create_connector`](TransportBackend::create_connector). [`ClientBuilder`] owns one
+/// of these and its transport setters (`add_root_certificate`, `identity`,
+/// `read_timeout`, …) write through to it.
+#[non_exhaustive]
+pub struct ConnectorConfig {
+    /// PEM-encoded CA/root certificate bundles to trust when verifying the
+    /// server, added on top of whatever trust the backend uses by default.
+    pub root_certs: Vec<Vec<u8>>,
+    /// Optional client certificate chain and private key (both PEM-encoded) used
+    /// for TLS client authentication.
+    pub identity: Option<(Vec<u8>, Vec<u8>)>,
+    /// Read timeout applied to the `TcpStream` before the handshake. `None`
+    /// disables it (reads block indefinitely).
+    pub read_timeout: Option<Duration>,
+    /// Write timeout applied to the `TcpStream` before the handshake. `None`
+    /// disables it (writes block indefinitely).
+    pub write_timeout: Option<Duration>,
+    /// Whether `TCP_NODELAY` (Nagle's algorithm disabled) is set on the socket.
+    pub tcp_nodelay: bool,
 }
 
-#[must_use = "builder must be used to create a Client"]
-pub struct ClientBuilder {
-    root_certs: Vec<Vec<u8>>,
-    identity: Option<(Vec<u8>, Vec<u8>)>,
-    read_timeout: Option<Duration>,
-    write_timeout: Option<Duration>,
-    tcp_nodelay: bool,
-    tls_backend: Box<dyn TlsBackend>,
-}
-
-#[cfg(feature = "default-tls-rustls")]
-impl Default for ClientBuilder {
+impl Default for ConnectorConfig {
+    /// Trusts only the backend's default roots, no client identity, the default
+    /// 30s read/write timeouts, and `TCP_NODELAY` enabled.
     fn default() -> Self {
-        Self::new(rustls::RustlsBackend)
-    }
-}
-
-impl ClientBuilder {
-    pub fn new(tls: impl TlsBackend) -> Self {
         Self {
             root_certs: Vec::new(),
             identity: None,
             read_timeout: DEFAULT_SOCKET_TIMEOUT,
             write_timeout: DEFAULT_SOCKET_TIMEOUT,
             tcp_nodelay: true,
-            tls_backend: Box::new(tls),
+        }
+    }
+}
+
+pub trait TransportBackend: 'static + Send + Sync {
+    fn create_connector(
+        &self,
+        config: &ConnectorConfig,
+        addr: String,
+        domain: &str,
+    ) -> Result<Arc<dyn Connector>>;
+}
+
+/// Configures how [`Client`] connections are opened (TLS backend, certificates,
+/// socket options, protocol settings), independently of which server they
+/// target. The address is supplied later, per connection.
+///
+/// Obtain one from [`Client::builder`] (rustls default backend) or
+/// [`ClientBuilder::new`] (explicit backend), set the options, then call
+/// [`connect`](Self::connect) to open a [`Client`] or, with the `pool` feature,
+/// `pool` to seed a connection pool. A single builder can target several servers
+/// by calling [`connect`](Self::connect) more than once with different
+/// addresses.
+#[must_use = "builder must be used to create a client or pool"]
+pub struct ClientBuilder {
+    // Transport-layer config handed to the TLS backend to build a connector.
+    connector: ConnectorConfig,
+    backend: Box<dyn TransportBackend>,
+    middlewares: Vec<Arc<dyn Middleware<crate::Error>>>,
+    version: Option<ProtocolVersion>,
+    // Protocol config forwarded onto the built `ClientConfig`. `None` for
+    // `supported_versions` means "use the default list".
+    supported_versions: Option<Vec<ProtocolVersion>>,
+}
+
+#[cfg(feature = "default-tls-rustls")]
+impl Default for ClientBuilder {
+    /// A builder using the built-in rustls backend, equivalent to
+    /// `ClientBuilder::new(RustlsBackend)`.
+    fn default() -> Self {
+        Self::new(rustls::RustlsBackend)
+    }
+}
+
+impl ClientBuilder {
+    /// Creates a builder using `backend` as the transport backend. The target
+    /// server is chosen later, when calling [`connect`](Self::connect) or `pool`.
+    pub fn new(backend: impl TransportBackend) -> Self {
+        Self {
+            connector: ConnectorConfig::default(),
+            backend: Box::new(backend),
+            middlewares: Vec::new(),
+            version: None,
+            supported_versions: None,
         }
     }
 
@@ -105,7 +167,7 @@ impl ClientBuilder {
     }
 
     pub fn add_root_certificate(mut self, pem: Vec<u8>) -> Self {
-        self.root_certs.push(pem);
+        self.connector.root_certs.push(pem);
         self
     }
 
@@ -115,45 +177,90 @@ impl ClientBuilder {
     /// The accepted private key formats depend on the TLS backend; see the
     /// backend type's documentation (e.g. `NativeTlsBackend`).
     pub fn identity(mut self, cert_pem: Vec<u8>, key_pem: Vec<u8>) -> Self {
-        self.identity = Some((cert_pem, key_pem));
+        self.connector.identity = Some((cert_pem, key_pem));
         self
     }
 
     /// Sets the read timeout applied to the underlying `TcpStream` before the
     /// TLS handshake. `None` disables the timeout (reads block indefinitely).
     pub fn read_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.read_timeout = timeout;
+        self.connector.read_timeout = timeout;
         self
     }
 
     /// Sets the write timeout applied to the underlying `TcpStream` before the
     /// TLS handshake. `None` disables the timeout (writes block indefinitely).
     pub fn write_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.write_timeout = timeout;
+        self.connector.write_timeout = timeout;
         self
     }
 
     /// Enables or disables `TCP_NODELAY` (Nagle's algorithm) on the underlying
     /// socket. Enabled by default to minimize request/response latency.
     pub fn tcp_nodelay(mut self, nodelay: bool) -> Self {
-        self.tcp_nodelay = nodelay;
+        self.connector.tcp_nodelay = nodelay;
         self
+    }
+
+    /// Appends a middleware to the chain of every client built here. The
+    /// middleware chain is shared cheaply (via `Arc`) across all clients built
+    /// from this configuration.
+    pub fn with_middleware(mut self, middleware: impl Middleware<crate::Error> + 'static) -> Self {
+        self.middlewares.push(Arc::new(middleware));
+        self
+    }
+
+    /// Pins the protocol version, skipping version negotiation on built clients.
+    pub fn with_version(mut self, version: ProtocolVersion) -> Self {
+        self.version = Some(version);
+        self
+    }
+
+    /// Sets the list of protocol versions offered during version negotiation
+    /// (normalized newest-first and deduped when the config is built).
+    pub fn with_supported_versions(mut self, versions: &[ProtocolVersion]) -> Self {
+        self.supported_versions = Some(versions.to_vec());
+        self
+    }
+
+    /// Finishes the transport configuration into the crate-internal
+    /// `ClientConfig` recipe for the KMIP server at `addr`/`domain` that
+    /// [`connect`](Self::connect) and, with the `pool` feature, `pool` build
+    /// from, carrying over the protocol settings staged via the `with_*`
+    /// methods. No connection is opened here.
+    pub(crate) fn build(&self, addr: impl Into<String>, domain: &str) -> Result<ClientConfig> {
+        let connector = self
+            .backend
+            .create_connector(&self.connector, addr.into(), domain)?;
+        let mut config = ClientConfig::new(connector);
+        if let Some(versions) = &self.supported_versions {
+            config = config.with_supported_versions(versions);
+        }
+        if let Some(v) = self.version {
+            // `config` is freshly built above, so its `OnceLock` is empty and
+            // this set always succeeds; a pinned version skips negotiation.
+            let _ = config.version.set(v);
+        }
+        // `config` is freshly built above (its middleware `Arc` is uniquely
+        // owned), so `make_mut` never clones, and extending with an empty chain
+        // is a no-op. No need to guard on `is_empty`.
+        Arc::make_mut(&mut config.middlewares).extend(self.middlewares.iter().cloned());
+        Ok(config)
     }
 
     /// Connects to the KMIP server at `addr` (a `"host:port"` string),
     /// performing the TLS handshake with `domain` as the SNI hostname.
     ///
-    /// The address is stored as-is and re-resolved on every connection the
-    /// client opens (initial connect, [`Client::try_clone`], and reconnects
-    /// after an unexpected EOF). This means DNS is queried again on each
-    /// reconnect, so a server that fails over to a new IP behind the same
-    /// hostname is picked up without rebuilding the client. A literal IP such
-    /// as `"10.0.0.1:5696"` is accepted too (it is parsed, not resolved).
-    pub fn connect(self, addr: impl Into<String>, domain: &str) -> Result<Client> {
-        let connector = self
-            .tls_backend
-            .create_connector(&self, addr.into(), domain)?;
-        Client::new(connector)
+    /// The address is passed as-is to the connector and re-resolved on every
+    /// connection it opens (this call, [`Client::try_clone`], and reconnects
+    /// after a dropped connection), so a server that fails over to a new IP
+    /// behind the same hostname is picked up automatically. A literal IP such as
+    /// `"10.0.0.1:5696"` is accepted too (it is parsed, not resolved).
+    ///
+    /// A single builder can be reused to target several servers by calling this
+    /// more than once with different addresses.
+    pub fn connect(&self, addr: impl Into<String>, domain: &str) -> Result<Client> {
+        self.build(addr, domain)?.connect()
     }
 
     // TODO: Add KMIP authentication
@@ -200,102 +307,141 @@ pub trait Connector: Send + Sync {
 }
 
 pub struct Client {
-    connector: Arc<dyn Connector>,
-    supported_versions: Vec<ProtocolVersion>,
-    version: Option<ProtocolVersion>,
+    // The shared, cheap-to-clone configuration this client was opened with. Its
+    // `version` field doubles as the cache for the negotiated protocol version
+    // (populated on first use when the version was not pinned).
+    config: ClientConfig,
     conn: ttlv::Stream<Box<dyn Transport>>,
+}
+
+/// The crate-internal, cheap-to-clone recipe for opening [`Client`]
+/// connections.
+///
+/// A `ClientConfig` holds the shared, `Send + Sync` pieces needed to build a
+/// client (the [`Connector`], middleware chain, supported-version list, and an
+/// optional pinned protocol version) but no live connection of its own. Each
+/// [`connect`](Self::connect) call opens a fresh connection via the connector,
+/// so a single config can spawn many independent clients (and seed a connection
+/// pool). It is not part of the public API: users configure via
+/// [`ClientBuilder`] and hold [`Client`]s (or a `ClientPool`).
+#[derive(Clone)]
+pub(crate) struct ClientConfig {
+    connector: Arc<dyn Connector>,
+    // Shared via `Arc` so cloning a config (once per pooled connection and on
+    // every `try_clone`/reconnect) is a refcount bump rather than a deep copy.
+    supported_versions: Arc<Vec<ProtocolVersion>>,
+    // Shared via `Arc` so the negotiated version is cached once across every
+    // client cloned from this config (all pooled connections + `try_clone`),
+    // not re-discovered per connection. A pinned version (`with_version`) is
+    // pre-set here at build time, which skips negotiation entirely.
+    version: Arc<OnceLock<ProtocolVersion>>,
     middlewares: Arc<Vec<Arc<dyn Middleware<crate::Error>>>>,
 }
 
+impl ClientConfig {
+    /// Creates a config from a [`Connector`], using the default supported
+    /// protocol versions, no middleware, and no pinned version.
+    ///
+    /// The connector is not dialed here; a connection is only opened when
+    /// [`connect`](Self::connect) is called.
+    pub fn new(connector: Arc<dyn Connector>) -> Self {
+        Self {
+            connector,
+            supported_versions: Arc::new(DEFAULT_SUPPORTED_VERSIONS.to_vec()),
+            version: Arc::new(OnceLock::new()),
+            middlewares: Arc::new(Vec::new()),
+        }
+    }
+
+    /// Normalizes and stores the list of protocol versions offered during
+    /// version negotiation (sorted newest-first and deduped). Used by
+    /// [`ClientBuilder::build`] to apply the builder's staged list.
+    #[must_use]
+    pub(crate) fn with_supported_versions(mut self, versions: &[ProtocolVersion]) -> Self {
+        let list = Arc::make_mut(&mut self.supported_versions);
+        list.clear();
+        list.extend_from_slice(versions);
+        list.sort_by(|a, b| b.cmp(a));
+        list.dedup();
+        self
+    }
+
+    /// Opens a new connection and assembles a [`Client`] from this config.
+    /// Fallible and may block on the TCP/TLS handshake. Call it repeatedly to
+    /// open independent connections that share this config.
+    pub fn connect(&self) -> Result<Client> {
+        Ok(Client {
+            conn: ttlv::Stream::new(self.connector.connect()?),
+            config: self.clone(),
+        })
+    }
+}
+
 impl Client {
+    /// Starts building a client using the built-in rustls backend.
+    ///
+    /// Returns a [`ClientBuilder`]; set TLS/socket and protocol options on
+    /// it, then call [`connect(addr, domain)`](ClientBuilder::connect)
+    /// (or, with the `pool` feature, `pool`) to target a specific server. See
+    /// [`ClientBuilder::new`] to choose a different TLS backend.
     #[cfg(feature = "default-tls-rustls")]
     pub fn builder() -> ClientBuilder {
         ClientBuilder::default()
-    }
-
-    pub fn new(connector: Arc<dyn Connector>) -> Result<Self> {
-        Ok(Self {
-            conn: ttlv::Stream::new(connector.connect()?),
-            connector,
-            supported_versions: DEFAULT_SUPPORTED_VERSIONS.to_vec(),
-            version: None,
-            middlewares: Arc::new(Vec::new()),
-        })
     }
 
     /// Returns a new `Client` that opens its own connection but reuses this
     /// client's configuration.
     ///
     /// A fresh transport is established via [`Connector::connect`], which is
-    /// fallible and may block on TCP/TLS handshake. The connector, middleware
-    /// chain, and supported-version list are shared cheaply via `Arc`;
-    /// subsequent builder calls like [`Self::with_middleware`] on the clone
-    /// diverge via copy-on-write and do not affect the original.
+    /// fallible and may block on the TCP/TLS handshake. The connector,
+    /// middleware chain, and supported-version list are shared cheaply via
+    /// `Arc` (the whole client configuration is cloned by a few refcount bumps).
     ///
     /// The negotiated protocol version is also carried over. Clones are
-    /// expected to talk to the same server as the source client — if the
+    /// expected to talk to the same server as the source client. If the
     /// connector resolves to a different host on reconnect, the cached
     /// version may not match what that host actually supports.
     pub fn try_clone(&self) -> Result<Self> {
-        Ok(Self {
-            conn: ttlv::Stream::new(self.connector.connect()?),
-            connector: self.connector.clone(),
-            supported_versions: self.supported_versions.clone(),
-            version: self.version,
-            middlewares: self.middlewares.clone(),
-        })
-    }
-
-    #[must_use]
-    pub fn with_middleware(mut self, middleware: impl Middleware<crate::Error> + 'static) -> Self {
-        Arc::make_mut(&mut self.middlewares).push(Arc::new(middleware));
-        self
-    }
-
-    #[must_use]
-    pub fn with_version(mut self, version: ProtocolVersion) -> Self {
-        self.version = Some(version);
-        self
-    }
-
-    #[must_use]
-    pub fn with_supported_versions(mut self, versions: &[ProtocolVersion]) -> Self {
-        self.supported_versions.clear();
-        self.supported_versions.extend_from_slice(versions);
-        self.supported_versions.sort_by(|a, b| b.cmp(a));
-        self.supported_versions.dedup();
-        self
+        self.config.connect()
     }
 
     pub fn version(&mut self) -> crate::Result<ProtocolVersion> {
-        if let Some(v) = &self.version {
+        if let Some(v) = self.config.version.get() {
             return Ok(*v);
         }
         tracing::debug!("Negotiating protocol version with server...");
         let resp = self.roundtrip(RequestMessage::new(
             ProtocolVersion::V1_1,
             DiscoverVersionsRequestPayload {
-                protocol_version: if self.supported_versions.is_empty() {
+                protocol_version: if self.config.supported_versions.is_empty() {
                     tracing::trace!(
                         "Client supported version list is empty, using default: {:?}",
                         DEFAULT_SUPPORTED_VERSIONS
                     );
                     DEFAULT_SUPPORTED_VERSIONS.to_vec()
                 } else {
-                    tracing::trace!("Client supported versions: {:?}", self.supported_versions);
-                    self.supported_versions.clone()
+                    tracing::trace!(
+                        "Client supported versions: {:?}",
+                        self.config.supported_versions
+                    );
+                    self.config.supported_versions.as_ref().clone()
                 },
             },
         ))?;
 
-        let pl: DiscoverVersionsResponsePayload = match resp
+        let negotiated = match resp
             .batch_item
             .into_iter()
             .next()
             .ok_or(Error::MissingBatchItem)?
             .success()
         {
-            Ok(pl) => pl.ok_or(Error::MissingResponsePayload)?.try_into()?,
+            Ok(pl) => {
+                let pl: DiscoverVersionsResponsePayload =
+                    pl.ok_or(Error::MissingResponsePayload)?.try_into()?;
+                tracing::trace!("Server supported versions: {:?}", pl.protocol_version);
+                pl.protocol_version.into_iter().next().unwrap_or_default()
+            }
             Err(ProtocolError {
                 reason: Some(ResultReason::OperationNotSupported),
                 ..
@@ -304,16 +450,21 @@ impl Client {
                 tracing::debug!(
                     "DiscoverVersions operation not supported, falling back to default protocol version"
                 );
-                let version = ProtocolVersion::default();
-                self.version = Some(version);
-                return Ok(version);
+                ProtocolVersion::default()
             }
             Err(other) => return Err(other.into()),
         };
-        tracing::trace!("Server supported versions: {:?}", pl.protocol_version);
-        let version = pl.protocol_version.into_iter().next().unwrap_or_default();
-        self.version = Some(version);
-        tracing::debug!("Negotiated protocol version: {}", version);
+
+        // Publish the negotiated version to the cache shared (via `Arc`) by
+        // every client built from this config: all pooled connections,
+        // `try_clone` descendants, and any client opened from it later.
+        // `get_or_init` makes the first negotiation win: if a sibling raced us
+        // it keeps its value and we adopt it, so every current and future
+        // client converges on a single version instead of each returning its
+        // own. The pinned version staged on `ClientBuilder` is never touched;
+        // it only seeds this cell up front in `build`.
+        let version = *self.config.version.get_or_init(|| negotiated);
+        tracing::debug!("Negotiated protocol version: {version}");
         Ok(version)
     }
 
@@ -322,13 +473,27 @@ impl Client {
         let mut retry = 3;
         loop {
             match self.conn.roundtrip(msg) {
-                Err(ttlv::Error::Io(e)) if retry > 0 && e.kind() == ErrorKind::UnexpectedEof => {
+                // A connection dropped while idle surfaces as a graceful EOF or,
+                // when the peer resets it, as a reset/aborted/broken-pipe error.
+                // All of these are recoverable by re-dialing and retrying, which
+                // is what lets pooled clients self-heal a connection that died
+                // between checkouts.
+                Err(ttlv::Error::Io(e))
+                    if retry > 0
+                        && matches!(
+                            e.kind(),
+                            ErrorKind::UnexpectedEof
+                                | ErrorKind::ConnectionReset
+                                | ErrorKind::ConnectionAborted
+                                | ErrorKind::BrokenPipe
+                        ) =>
+                {
                     tracing::warn!("I/O error during request/response roundtrip: {e:?}");
                     tracing::warn!(
                         "Attempting to reconnect and retry the request ({retry} retries left)",
                     );
                     //FIXME: If connect fails, there's no retry as the error is returned immediately.
-                    self.conn = ttlv::Stream::new(self.connector.connect()?);
+                    self.conn = ttlv::Stream::new(self.config.connector.connect()?);
                     retry -= 1;
                     continue;
                 }
@@ -422,11 +587,37 @@ impl Iterator for ResponseBatchIter {
 impl Chain for Client {
     type Error = crate::Error;
     fn get_middleware(&self, idx: usize) -> Option<Arc<dyn Middleware<Self::Error>>> {
-        self.middlewares.get(idx).cloned()
+        self.config.middlewares.get(idx).cloned()
     }
 
     fn final_handler(&mut self, req: RequestMessage) -> Result<ResponseMessage> {
         self.roundtrip_ttlv(&req)
+    }
+}
+
+#[cfg(test)]
+impl ConnectorConfig {
+    /// A config trusting a single PEM root-certificate bundle. Shared by the TLS
+    /// backends' tests, which each feed `create_connector` a known-good and a
+    /// malformed CA bundle.
+    pub(crate) fn with_root(root: Vec<u8>) -> Self {
+        Self {
+            root_certs: vec![root],
+            ..Self::default()
+        }
+    }
+}
+
+/// A plain (non-TLS) [`Connector`] that dials a re-resolvable `"host:port"`
+/// string on every `connect()`, mirroring how the real TLS connectors reach the
+/// server. Shared by this module's tests and the `pool` module's tests.
+#[cfg(test)]
+pub(crate) struct LocalConnector(pub(crate) String);
+
+#[cfg(test)]
+impl Connector for LocalConnector {
+    fn connect(&self) -> Result<Box<dyn Transport>> {
+        Ok(Box::new(TcpStream::connect(self.0.as_str())?))
     }
 }
 
@@ -438,34 +629,66 @@ mod tests {
     #[cfg(feature = "default-tls-rustls")]
     #[test]
     fn test_client_builder_defaults() {
-        let builder = ClientBuilder::default();
-        assert_eq!(builder.read_timeout, Some(Duration::from_secs(30)));
-        assert_eq!(builder.write_timeout, Some(Duration::from_secs(30)));
-        assert!(builder.tcp_nodelay);
+        let builder = Client::builder();
+        assert_eq!(
+            builder.connector.read_timeout,
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            builder.connector.write_timeout,
+            Some(Duration::from_secs(30))
+        );
+        assert!(builder.connector.tcp_nodelay);
     }
 
     #[cfg(feature = "default-tls-rustls")]
     #[test]
     fn test_client_builder_custom_timeouts() {
-        let builder = ClientBuilder::default()
+        let builder = Client::builder()
             .read_timeout(Some(Duration::from_secs(10)))
             .write_timeout(Some(Duration::from_secs(60)))
             .tcp_nodelay(false);
 
-        assert_eq!(builder.read_timeout, Some(Duration::from_secs(10)));
-        assert_eq!(builder.write_timeout, Some(Duration::from_secs(60)));
-        assert!(!builder.tcp_nodelay);
+        assert_eq!(
+            builder.connector.read_timeout,
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(
+            builder.connector.write_timeout,
+            Some(Duration::from_secs(60))
+        );
+        assert!(!builder.connector.tcp_nodelay);
     }
 
     #[cfg(feature = "default-tls-rustls")]
     #[test]
     fn test_client_builder_disable_timeouts() {
-        let builder = ClientBuilder::default()
-            .read_timeout(None)
-            .write_timeout(None);
+        let builder = Client::builder().read_timeout(None).write_timeout(None);
 
-        assert_eq!(builder.read_timeout, None);
-        assert_eq!(builder.write_timeout, None);
+        assert_eq!(builder.connector.read_timeout, None);
+        assert_eq!(builder.connector.write_timeout, None);
+    }
+
+    #[cfg(feature = "default-tls-rustls")]
+    #[test]
+    fn builder_with_shortcuts_forward_to_built_config() {
+        let config = Client::builder()
+            .with_middleware(NoopMiddleware)
+            .with_middleware(NoopMiddleware)
+            .with_version(ProtocolVersion::V1_2)
+            .with_supported_versions(&[ProtocolVersion::V1_2, ProtocolVersion::V1_4])
+            .build("localhost:5696", "localhost")
+            .unwrap();
+
+        // Both middlewares, the pinned version, and the supported-version list
+        // (sorted descending + deduped by ClientConfig::with_supported_versions)
+        // land on the built config.
+        assert_eq!(config.middlewares.len(), 2);
+        assert_eq!(config.version.get(), Some(&ProtocolVersion::V1_2));
+        assert_eq!(
+            *config.supported_versions,
+            vec![ProtocolVersion::V1_4, ProtocolVersion::V1_2],
+        );
     }
 
     #[test]
@@ -578,15 +801,6 @@ mod tests {
         }
     }
 
-    /// Connects via a re-resolvable `"host:port"` string, mirroring how the
-    /// real TLS connectors dial the server on every `connect()`.
-    struct LocalConnector(String);
-    impl Connector for LocalConnector {
-        fn connect(&self) -> Result<Box<dyn Transport>> {
-            Ok(Box::new(TcpStream::connect(self.0.as_str())?))
-        }
-    }
-
     struct NoopMiddleware;
     impl<E> Middleware<E> for NoopMiddleware {
         fn call(
@@ -599,34 +813,68 @@ mod tests {
     }
 
     #[test]
-    fn try_clone_middleware_diverges_via_cow() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
+    fn config_clone_shares_middleware_arc() {
+        let mut config = ClientConfig::new(Arc::new(LocalConnector("unused:0".to_string())));
+        Arc::make_mut(&mut config.middlewares).push(Arc::new(NoopMiddleware));
 
-        let original = Client::new(Arc::new(LocalConnector(addr.to_string())))
-            .unwrap()
-            .with_middleware(NoopMiddleware);
+        let cloned = config.clone();
 
-        let clone = original
-            .try_clone()
-            .unwrap()
-            .with_middleware(NoopMiddleware);
-
-        assert_eq!(original.middlewares.len(), 1);
-        assert_eq!(clone.middlewares.len(), 2);
+        // Cloning a config is cheap: it shares the middleware `Arc` rather than
+        // deep-copying the chain. This is what makes seeding a pool (which holds
+        // a cloned config) cheap.
+        assert!(Arc::ptr_eq(&config.middlewares, &cloned.middlewares));
     }
 
     #[test]
-    fn try_clone_shares_middleware_when_unchanged() {
+    fn built_client_shares_config_middleware() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let original = Client::new(Arc::new(LocalConnector(addr.to_string())))
-            .unwrap()
-            .with_middleware(NoopMiddleware);
-        let clone = original.try_clone().unwrap();
+        let mut config = ClientConfig::new(Arc::new(LocalConnector(addr.to_string())));
+        Arc::make_mut(&mut config.middlewares).push(Arc::new(NoopMiddleware));
 
-        assert!(Arc::ptr_eq(&original.middlewares, &clone.middlewares));
+        // Every client built from the same config shares the middleware `Arc`,
+        // and `try_clone` (which reuses the client's config) preserves it.
+        let client = config.connect().unwrap();
+        let clone = client.try_clone().unwrap();
+
+        assert_eq!(client.config.middlewares.len(), 1);
+        assert!(Arc::ptr_eq(&config.middlewares, &client.config.middlewares));
+        assert!(Arc::ptr_eq(
+            &client.config.middlewares,
+            &clone.config.middlewares
+        ));
+    }
+
+    #[test]
+    fn negotiated_version_is_shared_across_clients() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // A pool (and `try_clone`) hands out many clients from one config; they
+        // must share the negotiated-version cache so a version learned by any
+        // one of them is seen by all the others and by clients opened later.
+        let config = ClientConfig::new(Arc::new(LocalConnector(addr.to_string())));
+        let first = config.connect().unwrap();
+        let second = first.try_clone().unwrap();
+
+        // Every client built from the config shares the same version cell.
+        assert!(Arc::ptr_eq(&first.config.version, &second.config.version));
+
+        // Publishing a version through one client (as `version()` does via
+        // `get_or_init`) is immediately visible to its siblings...
+        let shared = *first.config.version.get_or_init(|| ProtocolVersion::V1_2);
+        assert_eq!(shared, ProtocolVersion::V1_2);
+        assert_eq!(second.config.version.get(), Some(&ProtocolVersion::V1_2));
+
+        // ...and to a client opened from the config *after* it was negotiated.
+        let future = config.connect().unwrap();
+        assert_eq!(future.config.version.get(), Some(&ProtocolVersion::V1_2));
+
+        // The first negotiation wins: a later racing publish adopts the shared
+        // value rather than diverging to its own.
+        let adopted = *second.config.version.get_or_init(|| ProtocolVersion::V1_4);
+        assert_eq!(adopted, ProtocolVersion::V1_2);
     }
 
     #[test]
@@ -637,7 +885,9 @@ mod tests {
         // A "host:port" string is re-resolved on every connect(), so both the
         // initial connection and the reconnect performed by try_clone resolve
         // the hostname afresh and succeed.
-        let original = Client::new(Arc::new(LocalConnector(format!("localhost:{port}")))).unwrap();
+        let original = ClientConfig::new(Arc::new(LocalConnector(format!("localhost:{port}"))))
+            .connect()
+            .unwrap();
         let _clone = original.try_clone().unwrap();
     }
 }

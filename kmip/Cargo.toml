@@ -20,6 +20,8 @@ tls-boring = ["dep:boring"]
 
 default-tls-rustls = ["tls-rustls"]
 
+pool = ["dep:r2d2"]
+
 arbitrary = ["dep:arbitrary", "ttlv/arbitrary", "bitflags/arbitrary", "chrono/arbitrary"]
 serde = ["dep:serde", "dep:serde_with", "dep:cfg_eval", "bitflags/serde", "ttlv/serde", "chrono/serde"]
 
@@ -35,7 +37,7 @@ interop-p521 = ["dep:p521", "_interop-elliptic-curve"]
 
 uuid = ["dep:uuid"]
 
-# Integration tests use `ClientBuilder::default()` / `.connect(...)`, which
+# Integration tests use `Client::builder()` / `.connect(addr, domain)`, which
 # require the built-in rustls default; pull it in so the suite compiles even
 # with `--no-default-features`.
 _integration_tests = ["interop-rust-crypto", "default-tls-rustls"]
@@ -51,6 +53,8 @@ chrono = "0.4"
 tracing = "0.1"
 
 uuid = { version = "1", optional = true, features = ["v4"] }
+
+r2d2 = { version = "0.8", optional = true }
 
 native-tls = { version = "0.2", optional = true }
 

@@ -1,7 +1,7 @@
 use std::env;
 
 use kmip::{
-    client::{Client, ClientBuilder},
+    client::Client,
     middlewares::{CorrelationValueMiddleware, DebugMiddleware},
 };
 
@@ -17,13 +17,13 @@ pub fn new_client() -> Client {
     let key = env::var("KMIP_TEST_KEY")
         .expect("KMIP_TEST_KEY must be set to the path of a PEM-encoded client private key");
 
-    ClientBuilder::default()
+    Client::builder()
         .add_root_certificate_file(&ca)
         .unwrap()
         .identity_file(&cert, &key)
         .unwrap()
-        .connect(addr, &domain)
-        .unwrap()
         .with_middleware(CorrelationValueMiddleware::uuid())
         .with_middleware(DebugMiddleware)
+        .connect(addr, &domain)
+        .unwrap()
 }
