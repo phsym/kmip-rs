@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use boring::{
     pkey::PKey,
@@ -8,17 +8,14 @@ use boring::{
 
 use crate::{Error, Result};
 
-use super::{Connector, ConnectorConfig, Transport, TransportBackend, dial};
+use super::{
+    Connector, ConnectorConfig, ConnectorFactory, SocketOptions, Transport, TransportBackend, dial,
+};
 
 pub struct BoringBackend;
 
-impl TransportBackend for BoringBackend {
-    fn create_connector(
-        &self,
-        config: &ConnectorConfig,
-        addr: String,
-        domain: &str,
-    ) -> Result<Arc<dyn Connector>> {
+impl BoringBackend {
+    fn build_config(config: &ConnectorConfig) -> Result<SslConnector> {
         let mut bld = SslConnector::builder(SslMethod::tls())?;
         bld.set_min_proto_version(Some(SslVersion::TLS1_2))?;
 
@@ -55,14 +52,34 @@ impl TransportBackend for BoringBackend {
         }
 
         bld.set_verify(SslVerifyMode::PEER);
-        Ok(Arc::new(BoringSslConnector::new(
-            bld.build(),
+        Ok(bld.build())
+    }
+}
+
+/// The prepared boring state, shared by every connector this backend hands out.
+/// `SslConnector` is a cheap ref-counted handle, so connectors clone it.
+struct BoringSslFactory {
+    cfg: SslConnector,
+    opts: SocketOptions,
+}
+
+impl ConnectorFactory for BoringSslFactory {
+    fn connector(&self, addr: String, domain: &str) -> Arc<dyn Connector> {
+        Arc::new(BoringSslConnector::new(
+            self.cfg.clone(),
             addr,
             domain,
-            config.read_timeout,
-            config.write_timeout,
-            config.tcp_nodelay,
-        )))
+            self.opts,
+        ))
+    }
+}
+
+impl TransportBackend for BoringBackend {
+    fn prepare(&self, config: &ConnectorConfig) -> Result<Box<dyn ConnectorFactory>> {
+        Ok(Box::new(BoringSslFactory {
+            cfg: Self::build_config(config)?,
+            opts: SocketOptions::from(config),
+        }))
     }
 }
 
@@ -70,9 +87,7 @@ pub struct BoringSslConnector {
     inner: SslConnector,
     domain: String,
     addr: String,
-    read_timeout: Option<Duration>,
-    write_timeout: Option<Duration>,
-    tcp_nodelay: bool,
+    opts: SocketOptions,
 }
 
 impl BoringSslConnector {
@@ -80,29 +95,20 @@ impl BoringSslConnector {
         cfg: SslConnector,
         addr: impl Into<String>,
         domain: impl Into<String>,
-        read_timeout: Option<Duration>,
-        write_timeout: Option<Duration>,
-        tcp_nodelay: bool,
+        opts: SocketOptions,
     ) -> Self {
         Self {
             inner: cfg,
             domain: domain.into(),
             addr: addr.into(),
-            read_timeout,
-            write_timeout,
-            tcp_nodelay,
+            opts,
         }
     }
 }
 
 impl Connector for BoringSslConnector {
     fn connect(&self) -> Result<Box<dyn Transport>> {
-        let sock = dial(
-            self.addr.as_str(),
-            self.read_timeout,
-            self.write_timeout,
-            self.tcp_nodelay,
-        )?;
+        let sock = dial(self.addr.as_str(), &self.opts)?;
         let mut tls_stream = self.inner.connect(&self.domain, sock)?;
         tls_stream.do_handshake()?;
         Ok(Box::new(tls_stream))

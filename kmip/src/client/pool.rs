@@ -6,12 +6,11 @@
 //! [`ClientBuilder`] via [`pool`](ClientBuilder::pool), without having to name
 //! `r2d2` yourself.
 //!
-//! Because the client's request path already recovers a connection that dropped
-//! between uses (it re-dials and retries once the next request hits a
-//! closed/reset connection), the pool does not attempt its own liveness
-//! checking: checkout validation is disabled by default. Recovery is best
-//! effort: if the re-dial itself fails (say the server is still down), that
-//! error is returned to the caller rather than retried.
+//! The client's request path already recovers a connection that dropped between
+//! uses, re-dialing and retrying once the next request hits a closed or reset
+//! connection, so the pool skips its own liveness checking: checkout validation
+//! is disabled by default. Recovery is best effort; if the re-dial itself fails,
+//! that error goes back to the caller rather than being retried.
 //!
 //! # Example
 //!
@@ -43,16 +42,16 @@ use std::time::Duration;
 
 pub use r2d2;
 
+#[cfg(feature = "cluster")]
+use super::ClusterConfig;
 use super::{Client, ClientBuilder, ClientConfig};
 use crate::{RequestMessage, payloads::DiscoverVersionsRequestPayload, types::ProtocolVersion};
 
 impl Client {
-    /// Actively verifies the connection is usable by issuing a lightweight
-    /// `DiscoverVersions` round trip, bypassing the cached negotiated version so
-    /// a socket that died while idle is actually detected. The reconnect and
-    /// retry loop transparently re-dials a dropped connection, so a successful
-    /// return means the client is live. Used by the pool's optional checkout
-    /// validation ([`KmipConnectionManager::is_valid`]).
+    /// Verifies the connection with a lightweight `DiscoverVersions` round trip,
+    /// bypassing the cached negotiated version so a socket that died while idle
+    /// is actually detected. The reconnect-and-retry loop re-dials it, so a
+    /// successful return means the client is live.
     fn probe(&mut self) -> crate::Result<()> {
         self.roundtrip(RequestMessage::new(
             ProtocolVersion::V1_1,
@@ -89,19 +88,16 @@ impl r2d2::ManageConnection for KmipConnectionManager {
     }
 
     fn is_valid(&self, conn: &mut Client) -> Result<(), Self::Error> {
-        // Not called under the pool's default `test_on_check_out(false)`; it only
-        // runs if a caller re-enables checkout validation via `test_on_check_out`.
-        // When they do, `probe` issues a real `DiscoverVersions` round trip
-        // (bypassing the cached/pinned version) so a socket that died while idle
-        // is actually detected. The client's reconnect and retry loop re-dials
-        // it, so a successful return means the checked-out client is live.
+        // Only reached when a caller re-enables checkout validation via
+        // `test_on_check_out`; the pool defaults it to false.
         conn.probe()
     }
 
-    fn has_broken(&self, _conn: &mut Client) -> bool {
-        // The client transparently reconnects and retries on a dropped
-        // connection, so a checked-in client is always considered reusable.
-        false
+    fn has_broken(&self, conn: &mut Client) -> bool {
+        // A client whose last exchange failed after the request went out may
+        // hold an unread response. Recycling it would let the next caller
+        // decode the *previous* caller's response as its own.
+        conn.broken
     }
 }
 
@@ -130,6 +126,47 @@ impl ClientBuilder {
         let config = self.build(addr, domain)?;
         Ok(ClientPoolBuilder::new(KmipConnectionManager::new(config)))
     }
+
+    /// Builds the transport and starts a [`ClientPool`] builder over a
+    /// *cluster* of endpoints, combining pooling with the failover and load
+    /// balancing of [`connect_cluster`](ClientBuilder::connect_cluster).
+    ///
+    /// Every connection the pool opens runs endpoint selection independently,
+    /// so the pool spreads across the cluster under
+    /// [`RoundRobin`](super::ClusterMode::RoundRobin) and drains away from a
+    /// failing node under [`Failover`](super::ClusterMode::Failover). See
+    /// [`ClusterConfig`] for the endpoints, mode, and cooldown.
+    ///
+    /// The reconnect caveat of
+    /// [`connect_cluster`](ClientBuilder::connect_cluster) applies: a pooled
+    /// client that reconnects mid-session may resume on a different node, so a
+    /// re-sent non-idempotent request can be executed twice.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use kmip::client::{Client, ClusterConfig, ClusterMode};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let pool = Client::builder()
+    ///     .add_root_certificate_file("ca.pem")?
+    ///     .pool_cluster(
+    ///         ClusterConfig::with_shared_domain(
+    ///             ["kmip-1.example.com:5696", "kmip-2.example.com:5696"],
+    ///             "kmip.example.com",
+    ///         )
+    ///         .mode(ClusterMode::RoundRobin),
+    ///     )?
+    ///     .max_size(8)
+    ///     .build()?;
+    /// # let _ = pool;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "cluster")]
+    pub fn pool_cluster(&self, config: ClusterConfig) -> crate::Result<ClientPoolBuilder> {
+        let config = self.build_cluster(config)?;
+        Ok(ClientPoolBuilder::new(KmipConnectionManager::new(config)))
+    }
 }
 
 /// Builder for a [`ClientPool`], returned by [`ClientBuilder::pool`].
@@ -152,14 +189,13 @@ pub struct ClientPoolBuilder {
 
 impl ClientPoolBuilder {
     fn new(manager: KmipConnectionManager) -> Self {
-        // Default to no checkout validation: the client self-heals a dropped
-        // connection on its next use, so probing on every checkout is wasted
-        // work. Callers who want it can re-enable it via `test_on_check_out`.
+        // No checkout validation: the client self-heals a dropped connection on
+        // its next use, so probing every checkout is wasted work.
         //
-        // Default `min_idle` to 1 rather than r2d2's `max_size`: `build()`
-        // eagerly dials `min_idle` connections and fails if any cannot be
-        // established, so prewarming the whole pool would make startup
-        // all-or-nothing against a briefly-unavailable server. One successful
+        // `min_idle` defaults to 1 rather than r2d2's `max_size`: `build()`
+        // eagerly dials `min_idle` connections and fails if any of them cannot
+        // be established, so prewarming the whole pool would make startup
+        // all-or-nothing against a briefly unavailable server. One successful
         // dial is enough; the pool grows to `max_size` on demand.
         Self {
             manager,
@@ -170,8 +206,7 @@ impl ClientPoolBuilder {
         }
     }
 
-    /// Records the first deferred configuration error; later ones are ignored so
-    /// the earliest problem is the one `build` reports.
+    /// Only the first error is kept, so `build` reports the earliest problem.
     fn record_error(&mut self, msg: impl Into<String>) {
         if self.error.is_none() {
             self.error = Some(msg.into());
@@ -249,9 +284,28 @@ impl ClientPoolBuilder {
     /// Escape hatch for [`r2d2::Builder`] options not surfaced above (custom
     /// error/event handlers, connection customizer, thread pool, …).
     ///
-    /// Note that `max_size` and `min_idle` are owned by the dedicated setters
-    /// above and applied at [`build`](Self::build) time, so setting them through
-    /// this closure has no effect.
+    /// # Panics
+    ///
+    /// The raw [`r2d2::Builder`] validates eagerly with `assert!`, unlike the
+    /// wrapper's setters which defer to [`build`](Self::build). An out of range
+    /// `max_size`, `connection_timeout`, `idle_timeout` or `max_lifetime` set
+    /// inside this closure panics *here*, before `build` runs. Prefer the
+    /// dedicated setters for those four, especially for values derived at
+    /// runtime where `0` is plausible:
+    ///
+    /// ```no_run
+    /// # use kmip::client::ClientPoolBuilder;
+    /// # fn f(builder: ClientPoolBuilder, secs: u64) -> kmip::Result<()> {
+    /// # let pool =
+    /// // `Duration::from_secs(0)` returns an error here …
+    /// builder.connection_timeout(std::time::Duration::from_secs(secs)).build()?;
+    /// // … but would panic inside `.configure(|b| b.connection_timeout(..))`.
+    /// # let _ = pool; Ok(()) }
+    /// ```
+    ///
+    /// `max_size` and `min_idle` are re-applied at [`build`](Self::build) time,
+    /// so a value set for them here is overwritten (a valid one is silently
+    /// discarded; an invalid one still panics first).
     #[must_use]
     pub fn configure(
         mut self,
@@ -298,11 +352,66 @@ mod tests {
     use super::*;
     use crate::client::LocalConnector;
 
-    /// A pool builder over a plain-TCP `LocalConnector`, mirroring what
-    /// `ClientBuilder::pool` produces but without needing a TLS backend.
+    /// A pool builder over a plain-TCP `LocalConnector`, like
+    /// `ClientBuilder::pool` produces but with no TLS backend needed.
     fn pool_builder(addr: String) -> ClientPoolBuilder {
         let config = ClientConfig::new(Arc::new(LocalConnector(addr)));
         ClientPoolBuilder::new(KmipConnectionManager::new(config))
+    }
+
+    /// Gives up on a silent server quickly, keeping the stalled-response test
+    /// well under the default 30s timeout.
+    struct ImpatientConnector(String);
+
+    impl crate::client::Connector for ImpatientConnector {
+        fn connect(&self) -> crate::Result<Box<dyn crate::client::Transport>> {
+            let stream = std::net::TcpStream::connect(self.0.as_str())?;
+            stream.set_read_timeout(Some(Duration::from_millis(200)))?;
+            Ok(Box::new(stream))
+        }
+    }
+
+    /// Accepts and then stalls: the request lands, the response never comes,
+    /// and the caller gives up while still owed one.
+    fn stalling_server() -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let handle = std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                std::thread::sleep(Duration::from_secs(2));
+                drop(stream);
+            }
+        });
+        (addr, handle)
+    }
+
+    #[test]
+    fn a_client_whose_response_never_arrived_is_not_recycled() {
+        // A connection with an unread response must not reach the next caller:
+        // the queued response belongs to the previous request, and nothing in
+        // the protocol path would notice the mismatch.
+        let (addr, server) = stalling_server();
+
+        let config = ClientConfig::new(Arc::new(ImpatientConnector(addr)));
+        let manager = KmipConnectionManager::new(config);
+
+        use r2d2::ManageConnection as _;
+
+        let mut client = manager.connect().unwrap();
+        assert!(
+            !manager.has_broken(&mut client),
+            "a fresh connection is reusable"
+        );
+
+        assert!(client.probe().is_err(), "expected the exchange to time out");
+
+        assert!(
+            manager.has_broken(&mut client),
+            "a connection left holding an unread response must not be recycled"
+        );
+
+        drop(client);
+        let _ = server.join();
     }
 
     #[test]
@@ -312,9 +421,8 @@ mod tests {
 
         let pool = pool_builder(addr).max_size(3).build().unwrap();
 
-        // min_idle defaults to 1, so build eagerly opens a single connection
-        // rather than the full max_size. One successful dial is enough for
-        // build() to succeed even against a briefly unavailable server.
+        // min_idle defaults to 1, so build opens a single connection rather
+        // than the full max_size.
         assert_eq!(pool.state().connections, 1);
     }
 
@@ -329,7 +437,6 @@ mod tests {
             .build()
             .unwrap();
 
-        // An explicit min_idle prewarms that many connections up front.
         assert_eq!(pool.state().connections, 3);
     }
 
@@ -351,7 +458,7 @@ mod tests {
             let _c = pool.get().unwrap();
             assert_eq!(pool.state().idle_connections, before - 1);
         }
-        // Dropping the guard checks the same connection back in, with no new one opened.
+        // The same connection comes back; no new one is opened.
         assert_eq!(pool.state().connections, before);
         assert_eq!(pool.state().idle_connections, before);
     }
@@ -432,14 +539,105 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
 
-        // Enabling checkout validation only affects `get()`; `build()` just dials
-        // the initial connections without a probe round trip, so it succeeds and
-        // prewarms even though nothing answers on the listener.
+        // Checkout validation only affects `get()`. `build()` just dials the
+        // initial connections, so it prewarms even though nothing answers.
         let pool = pool_builder(addr)
             .max_size(2)
             .test_on_check_out(true)
             .build()
             .unwrap();
         assert_eq!(pool.state().connections, 1);
+    }
+
+    #[cfg(feature = "cluster")]
+    mod cluster {
+        use super::*;
+
+        struct CountingConnector {
+            inner: LocalConnector,
+            dials: std::sync::atomic::AtomicUsize,
+        }
+
+        impl CountingConnector {
+            fn new(addr: &str) -> Arc<Self> {
+                Arc::new(Self {
+                    inner: LocalConnector(addr.to_string()),
+                    dials: std::sync::atomic::AtomicUsize::new(0),
+                })
+            }
+            fn dials(&self) -> usize {
+                self.dials.load(std::sync::atomic::Ordering::SeqCst)
+            }
+        }
+
+        impl crate::client::Connector for CountingConnector {
+            fn connect(&self) -> crate::Result<Box<dyn crate::client::Transport>> {
+                self.dials.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.inner.connect()
+            }
+        }
+
+        #[test]
+        fn pool_spreads_connections_across_endpoints() {
+            use crate::client::{ClusterConnector, ClusterMode, Connector};
+
+            // Both endpoints dial the same listener, so this asserts on the
+            // endpoint selection, not the socket. Plain TCP, no TLS server.
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap().to_string();
+            let (ep_a, ep_b) = (CountingConnector::new(&addr), CountingConnector::new(&addr));
+
+            let cluster = ClusterConnector::new(
+                vec![
+                    ("ep_a".to_string(), ep_a.clone() as Arc<dyn Connector>),
+                    ("ep_b".to_string(), ep_b.clone() as Arc<dyn Connector>),
+                ],
+                Duration::from_secs(5),
+                ClusterMode::RoundRobin,
+            )
+            .unwrap();
+
+            let config = ClientConfig::new(Arc::new(cluster));
+            let pool = ClientPoolBuilder::new(KmipConnectionManager::new(config))
+                .max_size(2)
+                .min_idle(Some(2))
+                .build()
+                .unwrap();
+
+            assert_eq!(pool.state().connections, 2);
+            // The start index advances per connection, so two connections land
+            // one on each endpoint whatever the random seed.
+            assert_eq!(ep_a.dials(), 1, "endpoint A got no connection");
+            assert_eq!(ep_b.dials(), 1, "endpoint B got no connection");
+        }
+
+        #[cfg(feature = "default-tls-rustls")]
+        #[test]
+        fn pool_cluster_builds_a_pool_builder_without_connecting() {
+            use crate::client::ClusterConfig;
+
+            // Nothing is dialed until `build()`, so this succeeds with nothing
+            // listening.
+            assert!(
+                Client::builder()
+                    .pool_cluster(ClusterConfig::with_shared_domain(
+                        ["127.0.0.1:1", "127.0.0.2:1"],
+                        "localhost",
+                    ))
+                    .is_ok()
+            );
+        }
+
+        #[cfg(feature = "default-tls-rustls")]
+        #[test]
+        fn pool_cluster_rejects_an_empty_endpoint_list() {
+            assert!(matches!(
+                Client::builder().pool_cluster(ClusterConfig::with_shared_domain(
+                    Vec::<String>::new(),
+                    "localhost",
+                )),
+                Err(crate::Error::ClusterUnavailable(_))
+            ));
+        }
     }
 }

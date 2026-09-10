@@ -21,6 +21,7 @@ tls-boring = ["dep:boring"]
 default-tls-rustls = ["tls-rustls"]
 
 pool = ["dep:r2d2"]
+cluster = []
 
 arbitrary = ["dep:arbitrary", "ttlv/arbitrary", "bitflags/arbitrary", "chrono/arbitrary"]
 serde = ["dep:serde", "dep:serde_with", "dep:cfg_eval", "bitflags/serde", "ttlv/serde", "chrono/serde"]

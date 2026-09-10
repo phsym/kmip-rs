@@ -1,10 +1,12 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use native_tls::{Certificate, Identity, Protocol, TlsConnector};
 
 use crate::Result;
 
-use super::{Connector, ConnectorConfig, Transport, TransportBackend, dial};
+use super::{
+    Connector, ConnectorConfig, ConnectorFactory, SocketOptions, Transport, TransportBackend, dial,
+};
 
 /// TLS backend delegating to the OS implementation via native-tls.
 ///
@@ -15,13 +17,8 @@ use super::{Connector, ConnectorConfig, Transport, TransportBackend, dial};
 /// `openssl pkcs8 -topk8 -nocrypt` if needed.
 pub struct NativeTlsBackend;
 
-impl TransportBackend for NativeTlsBackend {
-    fn create_connector(
-        &self,
-        config: &ConnectorConfig,
-        addr: String,
-        domain: &str,
-    ) -> Result<Arc<dyn Connector>> {
+impl NativeTlsBackend {
+    fn build_config(config: &ConnectorConfig) -> Result<TlsConnector> {
         let mut bld = TlsConnector::builder();
         if !config.root_certs.is_empty() {
             // If root CAs have been provided, disable system roots
@@ -40,15 +37,34 @@ impl TransportBackend for NativeTlsBackend {
             bld.identity(Identity::from_pkcs8(cert, key)?);
         }
         bld.min_protocol_version(Some(Protocol::Tlsv12));
+        Ok(bld.build()?)
+    }
+}
 
-        Ok(Arc::new(NativeTlsConnector::new(
-            bld.build()?,
+/// The prepared native-tls state, shared by every connector this backend hands
+/// out. `TlsConnector` is a cheap ref-counted handle, so connectors clone it.
+struct NativeTlsFactory {
+    cfg: TlsConnector,
+    opts: SocketOptions,
+}
+
+impl ConnectorFactory for NativeTlsFactory {
+    fn connector(&self, addr: String, domain: &str) -> Arc<dyn Connector> {
+        Arc::new(NativeTlsConnector::new(
+            self.cfg.clone(),
             addr,
             domain,
-            config.read_timeout,
-            config.write_timeout,
-            config.tcp_nodelay,
-        )))
+            self.opts,
+        ))
+    }
+}
+
+impl TransportBackend for NativeTlsBackend {
+    fn prepare(&self, config: &ConnectorConfig) -> Result<Box<dyn ConnectorFactory>> {
+        Ok(Box::new(NativeTlsFactory {
+            cfg: Self::build_config(config)?,
+            opts: SocketOptions::from(config),
+        }))
     }
 }
 
@@ -56,9 +72,7 @@ pub struct NativeTlsConnector {
     inner: TlsConnector,
     domain: String,
     addr: String,
-    read_timeout: Option<Duration>,
-    write_timeout: Option<Duration>,
-    tcp_nodelay: bool,
+    opts: SocketOptions,
 }
 
 impl NativeTlsConnector {
@@ -66,29 +80,20 @@ impl NativeTlsConnector {
         cfg: TlsConnector,
         addr: impl Into<String>,
         domain: impl Into<String>,
-        read_timeout: Option<Duration>,
-        write_timeout: Option<Duration>,
-        tcp_nodelay: bool,
+        opts: SocketOptions,
     ) -> Self {
         Self {
             inner: cfg,
             domain: domain.into(),
             addr: addr.into(),
-            read_timeout,
-            write_timeout,
-            tcp_nodelay,
+            opts,
         }
     }
 }
 
 impl Connector for NativeTlsConnector {
     fn connect(&self) -> Result<Box<dyn Transport>> {
-        let sock = dial(
-            self.addr.as_str(),
-            self.read_timeout,
-            self.write_timeout,
-            self.tcp_nodelay,
-        )?;
+        let sock = dial(self.addr.as_str(), &self.opts)?;
         let tls_stream = self.inner.connect(&self.domain, sock)?;
         Ok(Box::new(tls_stream))
     }

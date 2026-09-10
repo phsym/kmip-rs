@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use rustls::{
     ClientConfig, ClientConnection, RootCertStore, StreamOwned,
@@ -11,51 +11,47 @@ use rustls_platform_verifier::BuilderVerifierExt;
 
 use crate::{Error, Result};
 
-use super::{Connector, ConnectorConfig, Transport, TransportBackend, dial};
+use super::{
+    Connector, ConnectorConfig, ConnectorFactory, SocketOptions, Transport, TransportBackend, dial,
+};
 
 pub struct RustlsConnector {
     cfg: Arc<ClientConfig>,
     domain: String,
     addr: String,
-    read_timeout: Option<Duration>,
-    write_timeout: Option<Duration>,
-    tcp_nodelay: bool,
+    opts: SocketOptions,
 }
 
 impl RustlsConnector {
+    /// Builds a connector over an already-shared [`ClientConfig`], so a cluster
+    /// parses one config for all its endpoints.
     pub fn new(
-        cfg: ClientConfig,
+        cfg: Arc<ClientConfig>,
         addr: impl Into<String>,
         domain: impl Into<String>,
-        read_timeout: Option<Duration>,
-        write_timeout: Option<Duration>,
-        tcp_nodelay: bool,
+        opts: SocketOptions,
     ) -> Self {
         Self {
-            cfg: Arc::new(cfg),
+            cfg,
             domain: domain.into(),
             addr: addr.into(),
-            read_timeout,
-            write_timeout,
-            tcp_nodelay,
+            opts,
         }
     }
 }
 
 impl Connector for RustlsConnector {
     fn connect(&self) -> Result<Box<dyn Transport>> {
+        // Dial first: building the `ClientConnection` generates a ClientHello
+        // and an ephemeral keypair, thrown away if the dial fails, which is the
+        // common case in a cluster failover sweep.
+        let mut sock = dial(self.addr.as_str(), &self.opts)?;
         let mut conn = ClientConnection::new(
             self.cfg.clone(),
             self.domain
                 .clone()
                 .try_into()
                 .map_err(|e: InvalidDnsNameError| Error::TLS(e.into()))?,
-        )?;
-        let mut sock = dial(
-            self.addr.as_str(),
-            self.read_timeout,
-            self.write_timeout,
-            self.tcp_nodelay,
         )?;
         // Drive the TLS handshake to completion right now
         conn.complete_io(&mut sock)?;
@@ -66,13 +62,8 @@ impl Connector for RustlsConnector {
 
 pub struct RustlsBackend;
 
-impl TransportBackend for RustlsBackend {
-    fn create_connector(
-        &self,
-        config: &ConnectorConfig,
-        addr: String,
-        domain: &str,
-    ) -> Result<Arc<dyn Connector>> {
+impl RustlsBackend {
+    fn build_config(config: &ConnectorConfig) -> Result<Arc<ClientConfig>> {
         let cfg = if !config.root_certs.is_empty() {
             let mut root_store = RootCertStore::empty();
             for root in &config.root_certs {
@@ -101,14 +92,34 @@ impl TransportBackend for RustlsBackend {
         } else {
             cfg.with_no_client_auth()
         };
-        Ok(Arc::new(RustlsConnector::new(
-            cfg,
+        Ok(Arc::new(cfg))
+    }
+}
+
+/// The parsed CA roots + client identity, shared by every connector this
+/// backend hands out.
+struct RustlsFactory {
+    cfg: Arc<ClientConfig>,
+    opts: SocketOptions,
+}
+
+impl ConnectorFactory for RustlsFactory {
+    fn connector(&self, addr: String, domain: &str) -> Arc<dyn Connector> {
+        Arc::new(RustlsConnector::new(
+            self.cfg.clone(),
             addr,
             domain,
-            config.read_timeout,
-            config.write_timeout,
-            config.tcp_nodelay,
-        )))
+            self.opts,
+        ))
+    }
+}
+
+impl TransportBackend for RustlsBackend {
+    fn prepare(&self, config: &ConnectorConfig) -> Result<Box<dyn ConnectorFactory>> {
+        Ok(Box::new(RustlsFactory {
+            cfg: Self::build_config(config)?,
+            opts: SocketOptions::from(config),
+        }))
     }
 }
 
