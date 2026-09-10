@@ -15,8 +15,6 @@ use super::{
 pub struct BoringBackend;
 
 impl BoringBackend {
-    /// Builds the shared boring [`SslConnector`] once, so it can be reused
-    /// across a cluster's endpoints.
     fn build_config(config: &ConnectorConfig) -> Result<SslConnector> {
         let mut bld = SslConnector::builder(SslMethod::tls())?;
         bld.set_min_proto_version(Some(SslVersion::TLS1_2))?;
@@ -58,9 +56,8 @@ impl BoringBackend {
     }
 }
 
-/// The prepared boring state, shared by every connector this backend hands
-/// out. `SslConnector` is a cheap, ref-counted handle, so each connector clones it
-/// rather than rebuilding it.
+/// The prepared boring state, shared by every connector this backend hands out.
+/// `SslConnector` is a cheap ref-counted handle, so connectors clone it.
 struct BoringSslFactory {
     cfg: SslConnector,
     opts: SocketOptions,

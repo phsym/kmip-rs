@@ -2,29 +2,21 @@
 //!
 //! [`ClusterConnector`] wraps a pool of per-endpoint [`Connector`]s and, on
 //! every [`connect`](Connector::connect), scans the pool from a *start index*
-//! that depends on the [`ClusterMode`]:
+//! set by the [`ClusterMode`]: [`Failover`](ClusterMode::Failover) always starts
+//! at the first endpoint, [`RoundRobin`](ClusterMode::RoundRobin) rotates the
+//! start per connection.
 //!
-//! - [`ClusterMode::Failover`] always starts at the first endpoint, so a healthy
-//!   leading endpoint is always preferred;
-//! - [`ClusterMode::RoundRobin`] rotates the start index per connection, so
-//!   successive connections spread across the pool (connection-level load
-//!   balancing).
-//!
-//! In both modes the scan then behaves identically:
+//! The scan itself is the same in both modes:
 //!
 //! - endpoints are visited in order from the start index, wrapping around;
 //! - an endpoint whose last dial failed within the cooldown window is skipped;
 //! - the first endpoint that connects wins and its cooldown is cleared;
-//! - if at least one endpoint was dialed and they all failed, the aggregated
-//!   error is returned;
-//! - if *every* endpoint was skipped for cooldown, they are all probed once
-//!   (ignoring cooldown) so a recovered node is found rather than pinning to a
-//!   fixed leader.
+//! - if every dialed endpoint failed, the aggregated error is returned;
+//! - if *all* endpoints were skipped for cooldown, each is probed once anyway,
+//!   so a recovered node is found instead of pinning to a fixed leader.
 //!
-//! Because the [`Client`](super::Client) reconnects through its [`Connector`]
-//! on a dropped connection (see `roundtrip_ttlv`), this applies both at
-//! session/clone open and on a mid-session reconnect — so the round-robin
-//! cursor also advances on reconnect and `try_clone`.
+//! The [`Client`](super::Client) reconnects through its [`Connector`], so a
+//! scan also runs on a mid-session reconnect and on `try_clone`.
 
 use std::{
     hash::{BuildHasher, Hasher, RandomState},
@@ -46,37 +38,33 @@ pub const DEFAULT_RETRY_COOLDOWN: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClusterMode {
     /// Always scan endpoints in configured order; the first reachable endpoint
-    /// wins. A leading healthy endpoint is always preferred.
+    /// wins.
     #[default]
     Failover,
     /// Rotate the scan's start index per connection so successive connections
-    /// spread across the pool (connection-level load balancing). Cooled-down
-    /// endpoints are still skipped and failover to a healthy endpoint applies.
+    /// spread across the pool. Cooled-down endpoints are still skipped and
+    /// failover to a healthy endpoint applies.
     ///
-    /// Note: a [`Client`](super::Client) reconnect (e.g. after a dropped
-    /// connection, see `roundtrip_ttlv`) goes through `connect()` and so
-    /// advances the rotation — a reconnect typically lands on a *different*
-    /// endpoint than the one the session opened on. This is unsuitable for
-    /// operations that rely on server-side state pinned to one connection/node
-    /// (e.g. multi-part crypto keyed by a correlation value), and it means a
-    /// request re-sent after an unexpected EOF may be re-executed on another
-    /// node — see [`ClientBuilder::connect_cluster`](super::ClientBuilder::connect_cluster).
-    /// [`Failover`](Self::Failover) can also switch nodes on reconnect (it
-    /// re-prefers a recovered leading endpoint), so this applies in both modes.
+    /// Note: a [`Client`](super::Client) reconnect goes through `connect()` too
+    /// and advances the rotation, so it usually lands on a *different* endpoint
+    /// than the session opened on. Avoid this mode for operations relying on
+    /// server-side state pinned to one node (e.g. multi-part crypto keyed by a
+    /// correlation value). See
+    /// [`ClientBuilder::connect_cluster`](super::ClientBuilder::connect_cluster)
+    /// for the re-sent request caveat, which applies to
+    /// [`Failover`](Self::Failover) too since it re-prefers a recovered leader.
     ///
-    /// Balancing is best-effort: while a node is cooling, the starts that would
-    /// have landed on it spill onto the next healthy endpoint, so a degraded
-    /// pool is not perfectly even until the node recovers.
+    /// Balancing is best-effort: while a node cools, the starts that would have
+    /// landed on it spill onto the next healthy endpoint.
     RoundRobin,
 }
 
 /// Configuration for a cluster connection, passed to
 /// [`ClientBuilder::connect_cluster`](super::ClientBuilder::connect_cluster).
 ///
-/// Carries the endpoint pool, the [`ClusterMode`], and the per-endpoint cooldown
-/// — cluster-only settings that live here rather than on the shared
-/// [`ClientBuilder`](super::ClientBuilder), which would silently ignore them for
-/// a single-endpoint [`connect`](super::ClientBuilder::connect).
+/// The endpoint pool, [`ClusterMode`], and per-endpoint cooldown live here
+/// rather than on [`ClientBuilder`](super::ClientBuilder), which would silently
+/// ignore them for a single-endpoint [`connect`](super::ClientBuilder::connect).
 pub struct ClusterConfig {
     pub(crate) endpoints: Vec<(String, String)>, // (addr, domain)
     pub(crate) mode: ClusterMode,
@@ -86,10 +74,10 @@ pub struct ClusterConfig {
 impl ClusterConfig {
     /// A cluster whose nodes all present the same TLS identity: every endpoint
     /// is validated against the single SNI / certificate `domain`. This is the
-    /// common case — a cluster is one logical service behind one certificate.
+    /// common case, one logical service behind one certificate.
     ///
-    /// An empty `addrs` iterator is accepted here but yields an empty pool,
-    /// which is rejected with [`Error::ClusterUnavailable`] at
+    /// An empty `addrs` iterator yields an empty pool, rejected with
+    /// [`Error::ClusterUnavailable`] at
     /// [`ClientBuilder::connect_cluster`](super::ClientBuilder::connect_cluster).
     pub fn with_shared_domain(
         addrs: impl IntoIterator<Item = impl Into<String>>,
@@ -102,8 +90,8 @@ impl ClusterConfig {
     /// A cluster whose nodes present per-host certificates: each endpoint pairs
     /// its `addr` with the SNI / certificate `domain` to validate it against.
     ///
-    /// An empty `endpoints` iterator is accepted here but yields an empty pool,
-    /// which is rejected with [`Error::ClusterUnavailable`] at
+    /// An empty `endpoints` iterator yields an empty pool, rejected with
+    /// [`Error::ClusterUnavailable`] at
     /// [`ClientBuilder::connect_cluster`](super::ClientBuilder::connect_cluster).
     pub fn with_endpoints(
         endpoints: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
@@ -130,9 +118,8 @@ impl ClusterConfig {
     /// is skipped for this duration before being dialed again (default
     /// [`DEFAULT_RETRY_COOLDOWN`]).
     ///
-    /// Note: a single-endpoint pool has nothing to fail over to, so its sole
-    /// endpoint is always re-probed to allow recovery — the cooldown does not
-    /// throttle reconnects in that degenerate case.
+    /// A single-endpoint pool has nothing to fail over to, so its sole endpoint
+    /// is always re-probed and the cooldown never throttles its reconnects.
     #[must_use]
     pub fn cooldown(mut self, cooldown: Duration) -> Self {
         self.cooldown = cooldown;
@@ -150,9 +137,8 @@ impl ClientBuilder {
             mode,
             cooldown,
         } = config;
-        // One prepared TLS state — CA bundle parsed, identity loaded — shared
-        // by every endpoint's connector rather than rebuilt per endpoint. The
-        // endpoint's address doubles as its label.
+        // One prepared TLS state (CA bundle parsed, identity loaded) shared by
+        // every endpoint's connector. The address doubles as the label.
         let factory = self.backend.prepare(&self.connector)?;
         let labelled = endpoints.into_iter().map(|(addr, domain)| {
             let connector = factory.connector(addr.clone(), &domain);
@@ -171,9 +157,8 @@ impl ClientBuilder {
     ///
     /// Note on retries: a mid-session reconnect (`roundtrip_ttlv` after an
     /// unexpected EOF, or [`Client::try_clone`]) re-runs endpoint selection and
-    /// may land on a *different* node. A request re-sent after the peer closed
-    /// mid-exchange can therefore be re-executed on another node — for a
-    /// non-idempotent operation (e.g. `Create`/`Destroy`) that means a possible
+    /// may land on a *different* node, so a re-sent request can execute twice.
+    /// For a non-idempotent operation (e.g. `Create`/`Destroy`) that means a
     /// duplicate side effect while the caller still sees success. Prefer
     /// idempotent operations, or a single-endpoint [`Self::connect`], where that
     /// matters.
@@ -196,7 +181,6 @@ fn clear_failed(health: &Health) {
 }
 
 struct Endpoint {
-    /// Human-readable identifier (the `host:port` address) for logs and errors.
     label: String,
     connector: Arc<dyn Connector>,
     health: Health,
@@ -209,9 +193,9 @@ struct Endpoint {
 /// cooldown on every dial and [`ClusterMode::Failover`] would pin to it while
 /// healthy nodes sit idle.
 ///
-/// Only failures before the connection has served a byte count against the
-/// node. After that a drop is the connection's own (an idle reaper, a
-/// mid-session reset) and says nothing about node health.
+/// A failure counts against the node only while the connection has yet to serve
+/// a byte. After that, a drop belongs to the connection itself (an idle reaper,
+/// a mid-session reset) and says nothing about node health.
 struct MonitoredTransport {
     inner: Box<dyn Transport>,
     health: Health,
@@ -219,13 +203,10 @@ struct MonitoredTransport {
 }
 
 impl MonitoredTransport {
-    /// Whether `e` means the connection failed, rather than an application
-    /// level or transient condition.
-    ///
     /// The shared [`is_disconnect`] set, plus the kinds that mean the node
-    /// accepted and then went silent — which a dial cannot see and the cooldown
-    /// exists for, but which the client's retry loop deliberately does not
-    /// treat as recoverable.
+    /// accepted and then went silent: invisible to a dial, and deliberately
+    /// left out of the client's retry loop, so the cooldown is what catches
+    /// them.
     fn is_connection_failure(e: &io::Error) -> bool {
         is_disconnect(e)
             || matches!(
@@ -280,18 +261,15 @@ pub struct ClusterConnector {
     endpoints: Vec<Endpoint>,
     cooldown: Duration,
     mode: ClusterMode,
-    /// Round-robin cursor; only consulted in [`ClusterMode::RoundRobin`]. Seeded
-    /// to a random start so single-connection processes do not all open on
-    /// endpoint 0.
+    /// Seeded to a random start so single-connection processes do not all open
+    /// on endpoint 0. Only consulted in [`ClusterMode::RoundRobin`].
     cursor: AtomicUsize,
 }
 
 impl ClusterConnector {
     /// Builds a connector over `connectors`. Each item is a `(label, connector)`
-    /// pair, where `label` is the endpoint's `host:port` address (used in logs
-    /// and errors). `mode` selects the endpoint-selection strategy; pass
-    /// [`ClusterMode::default`] for plain failover. Returns an error if the pool
-    /// is empty.
+    /// pair, where `label` is the endpoint's `host:port` address. Returns an
+    /// error if the pool is empty.
     pub fn new(
         connectors: impl IntoIterator<Item = (String, Arc<dyn Connector>)>,
         cooldown: Duration,
@@ -310,8 +288,6 @@ impl ClusterConnector {
                 "at least one endpoint is required".to_string(),
             ));
         }
-        // Random start so that with one long-lived Client per process every
-        // process does not open its first connection on endpoint 0.
         let seed = RandomState::new().build_hasher().finish() as usize;
         Ok(Self {
             endpoints,
@@ -321,8 +297,6 @@ impl ClusterConnector {
         })
     }
 
-    /// Index of the endpoint the next scan starts from. Failover always starts
-    /// at 0; round-robin advances a cursor so connections spread across the pool.
     fn start_index(&self) -> usize {
         match self.mode {
             ClusterMode::Failover => 0,
@@ -340,12 +314,10 @@ impl ClusterConnector {
             .is_some_and(|at| at.elapsed() < self.cooldown)
     }
 
-    /// Dials one endpoint, stamping its cooldown state: cleared on success, set
-    /// to the current instant on failure.
-    ///
-    /// Clearing on success is provisional: a dial cannot see whether the node
-    /// serves KMIP. [`MonitoredTransport`] re-stamps the endpoint if the
-    /// exchange it carries fails.
+    /// Dials one endpoint and stamps its cooldown state. Clearing it on success
+    /// is provisional, since a dial cannot see whether the node serves KMIP;
+    /// [`MonitoredTransport`] re-stamps the endpoint if the exchange it carries
+    /// fails.
     fn attempt(&self, endpoint: &Endpoint) -> Result<Box<dyn Transport>> {
         let result = endpoint.connector.connect();
         match &result {
@@ -381,9 +353,8 @@ impl Connector for ClusterConnector {
                 !cooling
             });
 
-        // With nothing live, every endpoint is cooling: probe them all once
-        // (ignoring cooldown) so a recovered node — not just the start endpoint
-        // — can bring the cluster back.
+        // With nothing live, every endpoint is cooling: probe them all once,
+        // ignoring cooldown, so any recovered node can bring the cluster back.
         let all_cooling = live.is_empty();
         if all_cooling {
             tracing::debug!("all cluster endpoints cooling; probing each once");
@@ -403,9 +374,9 @@ impl Connector for ClusterConnector {
             }
         }
 
-        // Name the endpoints we skipped too: an error listing only what we
-        // happened to dial reads as a smaller outage than it is. When all were
-        // cooling they were all just dialed, so there is nothing to add.
+        // Name the skipped endpoints too: an error listing only what we dialed
+        // reads as a smaller outage than it is. When all were cooling they were
+        // all dialed, so there is nothing to add.
         if !all_cooling {
             failures.extend(
                 cooling
@@ -454,15 +425,13 @@ mod tests {
         }
     }
 
-    /// An always-succeeding connector, for the round-robin distribution tests.
     fn healthy() -> Arc<ScriptedConnector> {
         ScriptedConnector::new(vec![true; 4])
     }
 
-    /// Builds a cluster from the given endpoint handles (labelled `ep0`, `ep1`,
-    /// …), keeping the concrete `Arc<ScriptedConnector>` handles so tests can
-    /// assert on `.calls()`. The round-robin cursor is reset to 0 so start
-    /// indices are deterministic.
+    /// Builds a cluster from the given endpoint handles, labelled `ep0`, `ep1`
+    /// and so on, keeping the concrete handles so tests can assert on
+    /// `.calls()`. The cursor is reset to 0 for deterministic start indices.
     fn cluster(
         endpoints: &[Arc<ScriptedConnector>],
         cooldown: Duration,
@@ -572,8 +541,7 @@ mod tests {
         assert_eq!(eps[2].calls(), 0);
 
         // #2: ep0 is skipped for cooldown; ep1 and ep2 are live and fail this
-        // pass. A live endpoint was dialed, so the cooled start (ep0) must NOT
-        // be re-probed.
+        // pass. A live endpoint was dialed, so the cooled start (ep0) stays put.
         assert!(c.connect().is_err());
         assert_eq!(eps[0].calls(), 1); // cooled start left alone
         assert_eq!(eps[1].calls(), 2);
@@ -614,8 +582,7 @@ mod tests {
         assert!(c.connect().is_err());
         assert_eq!(eps[0].calls(), 1);
 
-        // #2: zero cooldown means endpoint 0 is NOT skipped and is dialed again,
-        // now succeeding.
+        // #2: zero cooldown, so endpoint 0 is dialed again and now succeeds.
         assert!(c.connect().is_ok());
         assert_eq!(eps[0].calls(), 2);
     }
@@ -726,7 +693,6 @@ mod tests {
         }
     }
 
-    /// Always accepts, always hands back a wedged transport.
     struct WedgedConnector(AtomicUsize);
 
     impl WedgedConnector {
@@ -763,7 +729,7 @@ mod tests {
         .unwrap();
         c.reset_cursor();
 
-        // Failover picks ep0, which connects. Nothing looks wrong yet.
+        // Failover picks ep0, which connects.
         let mut conn = c.connect().unwrap();
         assert_eq!(wedged.calls(), 1);
         assert_eq!(healthy.calls(), 0);

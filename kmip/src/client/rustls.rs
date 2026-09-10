@@ -24,7 +24,7 @@ pub struct RustlsConnector {
 
 impl RustlsConnector {
     /// Builds a connector over an already-shared [`ClientConfig`], so a cluster
-    /// shares one parsed config across its endpoints instead of one per endpoint.
+    /// parses one config for all its endpoints.
     pub fn new(
         cfg: Arc<ClientConfig>,
         addr: impl Into<String>,
@@ -43,8 +43,8 @@ impl RustlsConnector {
 impl Connector for RustlsConnector {
     fn connect(&self) -> Result<Box<dyn Transport>> {
         // Dial first: building the `ClientConnection` generates a ClientHello
-        // and an ephemeral keypair, which a failed dial would throw away. That
-        // is the common case in a cluster failover sweep.
+        // and an ephemeral keypair, thrown away if the dial fails, which is the
+        // common case in a cluster failover sweep.
         let mut sock = dial(self.addr.as_str(), &self.opts)?;
         let mut conn = ClientConnection::new(
             self.cfg.clone(),
@@ -63,8 +63,6 @@ impl Connector for RustlsConnector {
 pub struct RustlsBackend;
 
 impl RustlsBackend {
-    /// Builds the shared rustls [`ClientConfig`] (parsed CA roots + client
-    /// identity) once, so it can be reused across a cluster's endpoints.
     fn build_config(config: &ConnectorConfig) -> Result<Arc<ClientConfig>> {
         let cfg = if !config.root_certs.is_empty() {
             let mut root_store = RootCertStore::empty();

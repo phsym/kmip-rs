@@ -18,8 +18,6 @@ use super::{
 pub struct NativeTlsBackend;
 
 impl NativeTlsBackend {
-    /// Builds the shared native-tls [`TlsConnector`] once, so it can be reused
-    /// across a cluster's endpoints.
     fn build_config(config: &ConnectorConfig) -> Result<TlsConnector> {
         let mut bld = TlsConnector::builder();
         if !config.root_certs.is_empty() {
@@ -44,8 +42,7 @@ impl NativeTlsBackend {
 }
 
 /// The prepared native-tls state, shared by every connector this backend hands
-/// out. `TlsConnector` is a cheap, ref-counted handle, so each connector clones it
-/// rather than rebuilding it.
+/// out. `TlsConnector` is a cheap ref-counted handle, so connectors clone it.
 struct NativeTlsFactory {
     cfg: TlsConnector,
     opts: SocketOptions,

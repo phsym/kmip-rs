@@ -6,12 +6,11 @@
 //! [`ClientBuilder`] via [`pool`](ClientBuilder::pool), without having to name
 //! `r2d2` yourself.
 //!
-//! Because the client's request path already recovers a connection that dropped
-//! between uses (it re-dials and retries once the next request hits a
-//! closed/reset connection), the pool does not attempt its own liveness
-//! checking: checkout validation is disabled by default. Recovery is best
-//! effort: if the re-dial itself fails (say the server is still down), that
-//! error is returned to the caller rather than retried.
+//! The client's request path already recovers a connection that dropped between
+//! uses, re-dialing and retrying once the next request hits a closed or reset
+//! connection, so the pool skips its own liveness checking: checkout validation
+//! is disabled by default. Recovery is best effort; if the re-dial itself fails,
+//! that error goes back to the caller rather than being retried.
 //!
 //! # Example
 //!
@@ -49,12 +48,10 @@ use super::{Client, ClientBuilder, ClientConfig};
 use crate::{RequestMessage, payloads::DiscoverVersionsRequestPayload, types::ProtocolVersion};
 
 impl Client {
-    /// Actively verifies the connection is usable by issuing a lightweight
-    /// `DiscoverVersions` round trip, bypassing the cached negotiated version so
-    /// a socket that died while idle is actually detected. The reconnect and
-    /// retry loop transparently re-dials a dropped connection, so a successful
-    /// return means the client is live. Used by the pool's optional checkout
-    /// validation ([`KmipConnectionManager::is_valid`]).
+    /// Verifies the connection with a lightweight `DiscoverVersions` round trip,
+    /// bypassing the cached negotiated version so a socket that died while idle
+    /// is actually detected. The reconnect-and-retry loop re-dials it, so a
+    /// successful return means the client is live.
     fn probe(&mut self) -> crate::Result<()> {
         self.roundtrip(RequestMessage::new(
             ProtocolVersion::V1_1,
@@ -91,12 +88,8 @@ impl r2d2::ManageConnection for KmipConnectionManager {
     }
 
     fn is_valid(&self, conn: &mut Client) -> Result<(), Self::Error> {
-        // Not called under the pool's default `test_on_check_out(false)`; it only
-        // runs if a caller re-enables checkout validation via `test_on_check_out`.
-        // When they do, `probe` issues a real `DiscoverVersions` round trip
-        // (bypassing the cached/pinned version) so a socket that died while idle
-        // is actually detected. The client's reconnect and retry loop re-dials
-        // it, so a successful return means the checked-out client is live.
+        // Only reached when a caller re-enables checkout validation via
+        // `test_on_check_out`; the pool defaults it to false.
         conn.probe()
     }
 
@@ -196,14 +189,13 @@ pub struct ClientPoolBuilder {
 
 impl ClientPoolBuilder {
     fn new(manager: KmipConnectionManager) -> Self {
-        // Default to no checkout validation: the client self-heals a dropped
-        // connection on its next use, so probing on every checkout is wasted
-        // work. Callers who want it can re-enable it via `test_on_check_out`.
+        // No checkout validation: the client self-heals a dropped connection on
+        // its next use, so probing every checkout is wasted work.
         //
-        // Default `min_idle` to 1 rather than r2d2's `max_size`: `build()`
-        // eagerly dials `min_idle` connections and fails if any cannot be
-        // established, so prewarming the whole pool would make startup
-        // all-or-nothing against a briefly-unavailable server. One successful
+        // `min_idle` defaults to 1 rather than r2d2's `max_size`: `build()`
+        // eagerly dials `min_idle` connections and fails if any of them cannot
+        // be established, so prewarming the whole pool would make startup
+        // all-or-nothing against a briefly unavailable server. One successful
         // dial is enough; the pool grows to `max_size` on demand.
         Self {
             manager,
@@ -214,8 +206,7 @@ impl ClientPoolBuilder {
         }
     }
 
-    /// Records the first deferred configuration error; later ones are ignored so
-    /// the earliest problem is the one `build` reports.
+    /// Only the first error is kept, so `build` reports the earliest problem.
     fn record_error(&mut self, msg: impl Into<String>) {
         if self.error.is_none() {
             self.error = Some(msg.into());
@@ -298,8 +289,7 @@ impl ClientPoolBuilder {
     /// The raw [`r2d2::Builder`] validates eagerly with `assert!`, unlike the
     /// wrapper's setters which defer to [`build`](Self::build). An out of range
     /// `max_size`, `connection_timeout`, `idle_timeout` or `max_lifetime` set
-    /// inside this closure panics *here*, before `build` runs, so `build`'s
-    /// no-panic promise does not cover values routed through it. Prefer the
+    /// inside this closure panics *here*, before `build` runs. Prefer the
     /// dedicated setters for those four, especially for values derived at
     /// runtime where `0` is plausible:
     ///
@@ -362,15 +352,15 @@ mod tests {
     use super::*;
     use crate::client::LocalConnector;
 
-    /// A pool builder over a plain-TCP `LocalConnector`, mirroring what
-    /// `ClientBuilder::pool` produces but without needing a TLS backend.
+    /// A pool builder over a plain-TCP `LocalConnector`, like
+    /// `ClientBuilder::pool` produces but with no TLS backend needed.
     fn pool_builder(addr: String) -> ClientPoolBuilder {
         let config = ClientConfig::new(Arc::new(LocalConnector(addr)));
         ClientPoolBuilder::new(KmipConnectionManager::new(config))
     }
 
-    /// Gives up on a silent server quickly, so the stalled-response case does
-    /// not need a 30s wait.
+    /// Gives up on a silent server quickly, keeping the stalled-response test
+    /// well under the default 30s timeout.
     struct ImpatientConnector(String);
 
     impl crate::client::Connector for ImpatientConnector {
@@ -387,7 +377,6 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let handle = std::thread::spawn(move || {
-            // Hold the connection open without ever replying.
             if let Ok((stream, _)) = listener.accept() {
                 std::thread::sleep(Duration::from_secs(2));
                 drop(stream);
@@ -414,7 +403,6 @@ mod tests {
             "a fresh connection is reusable"
         );
 
-        // The request goes out; the response never comes.
         assert!(client.probe().is_err(), "expected the exchange to time out");
 
         assert!(
@@ -433,9 +421,8 @@ mod tests {
 
         let pool = pool_builder(addr).max_size(3).build().unwrap();
 
-        // min_idle defaults to 1, so build eagerly opens a single connection
-        // rather than the full max_size. One successful dial is enough for
-        // build() to succeed even against a briefly unavailable server.
+        // min_idle defaults to 1, so build opens a single connection rather
+        // than the full max_size.
         assert_eq!(pool.state().connections, 1);
     }
 
@@ -450,7 +437,6 @@ mod tests {
             .build()
             .unwrap();
 
-        // An explicit min_idle prewarms that many connections up front.
         assert_eq!(pool.state().connections, 3);
     }
 
@@ -472,7 +458,7 @@ mod tests {
             let _c = pool.get().unwrap();
             assert_eq!(pool.state().idle_connections, before - 1);
         }
-        // Dropping the guard checks the same connection back in, with no new one opened.
+        // The same connection comes back; no new one is opened.
         assert_eq!(pool.state().connections, before);
         assert_eq!(pool.state().idle_connections, before);
     }
@@ -553,9 +539,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
 
-        // Enabling checkout validation only affects `get()`; `build()` just dials
-        // the initial connections without a probe round trip, so it succeeds and
-        // prewarms even though nothing answers on the listener.
+        // Checkout validation only affects `get()`. `build()` just dials the
+        // initial connections, so it prewarms even though nothing answers.
         let pool = pool_builder(addr)
             .max_size(2)
             .test_on_check_out(true)
@@ -564,13 +549,10 @@ mod tests {
         assert_eq!(pool.state().connections, 1);
     }
 
-    /// Pooling over a cluster: `pool_cluster` and pools whose connector is a
-    /// [`ClusterConnector`](crate::client::ClusterConnector).
     #[cfg(feature = "cluster")]
     mod cluster {
         use super::*;
 
-        /// Counts the connections one cluster endpoint was asked to open.
         struct CountingConnector {
             inner: LocalConnector,
             dials: std::sync::atomic::AtomicUsize,
@@ -599,9 +581,8 @@ mod tests {
         fn pool_spreads_connections_across_endpoints() {
             use crate::client::{ClusterConnector, ClusterMode, Connector};
 
-            // The combination `pool_cluster` exists to make reachable. Both
-            // endpoints dial the same listener, so this asserts on the selection,
-            // not the socket. Plain TCP, so no TLS server is needed.
+            // Both endpoints dial the same listener, so this asserts on the
+            // endpoint selection, not the socket. Plain TCP, no TLS server.
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap().to_string();
             let (ep_a, ep_b) = (CountingConnector::new(&addr), CountingConnector::new(&addr));
@@ -624,8 +605,8 @@ mod tests {
                 .unwrap();
 
             assert_eq!(pool.state().connections, 2);
-            // The start index advances per connection, so two land one on each
-            // endpoint whatever the random seed.
+            // The start index advances per connection, so two connections land
+            // one on each endpoint whatever the random seed.
             assert_eq!(ep_a.dials(), 1, "endpoint A got no connection");
             assert_eq!(ep_b.dials(), 1, "endpoint B got no connection");
         }
