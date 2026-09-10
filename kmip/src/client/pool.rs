@@ -102,7 +102,7 @@ impl r2d2::ManageConnection for KmipConnectionManager {
         // A client whose last exchange failed after the request went out may
         // hold an unread response. Recycling it would let the next caller
         // decode the *previous* caller's response as its own.
-        conn.is_broken()
+        conn.broken
     }
 }
 
@@ -459,7 +459,7 @@ mod tests {
         let addr = listener.local_addr().unwrap().to_string();
         let (ep_a, ep_b) = (CountingConnector::new(&addr), CountingConnector::new(&addr));
 
-        let cluster = ClusterConnector::with_mode(
+        let cluster = ClusterConnector::new(
             vec![
                 ("ep_a".to_string(), ep_a.clone() as Arc<dyn Connector>),
                 ("ep_b".to_string(), ep_b.clone() as Arc<dyn Connector>),

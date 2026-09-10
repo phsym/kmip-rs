@@ -1,10 +1,12 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use native_tls::{Certificate, Identity, Protocol, TlsConnector};
 
 use crate::Result;
 
-use super::{Connector, ConnectorConfig, Transport, TransportBackend, dial};
+use super::{
+    Connector, ConnectorConfig, ConnectorFactory, SocketOptions, Transport, TransportBackend, dial,
+};
 
 /// TLS backend delegating to the OS implementation via native-tls.
 ///
@@ -41,46 +43,31 @@ impl NativeTlsBackend {
     }
 }
 
-impl TransportBackend for NativeTlsBackend {
-    fn create_connector(
-        &self,
-        config: &ConnectorConfig,
-        addr: String,
-        domain: &str,
-    ) -> Result<Arc<dyn Connector>> {
-        Ok(Arc::new(NativeTlsConnector::new(
-            Self::build_config(config)?,
+/// The prepared native-tls state, shared by every connector this backend hands
+/// out. `TlsConnector` is a cheap, ref-counted handle, so each connector clones it
+/// rather than rebuilding it.
+struct NativeTlsFactory {
+    cfg: TlsConnector,
+    opts: SocketOptions,
+}
+
+impl ConnectorFactory for NativeTlsFactory {
+    fn connector(&self, addr: String, domain: &str) -> Arc<dyn Connector> {
+        Arc::new(NativeTlsConnector::new(
+            self.cfg.clone(),
             addr,
             domain,
-            config.connect_timeout,
-            config.read_timeout,
-            config.write_timeout,
-            config.tcp_nodelay,
-        )))
+            self.opts,
+        ))
     }
+}
 
-    fn create_connectors(
-        &self,
-        config: &ConnectorConfig,
-        endpoints: &[(String, String)],
-    ) -> Result<Vec<Arc<dyn Connector>>> {
-        // `TlsConnector` is a cheap, ref-counted handle: build it once and clone
-        // it into each endpoint's connector.
-        let cfg = Self::build_config(config)?;
-        Ok(endpoints
-            .iter()
-            .map(|(addr, domain)| {
-                Arc::new(NativeTlsConnector::new(
-                    cfg.clone(),
-                    addr.clone(),
-                    domain.clone(),
-                    config.connect_timeout,
-                    config.read_timeout,
-                    config.write_timeout,
-                    config.tcp_nodelay,
-                )) as Arc<dyn Connector>
-            })
-            .collect())
+impl TransportBackend for NativeTlsBackend {
+    fn prepare(&self, config: &ConnectorConfig) -> Result<Box<dyn ConnectorFactory>> {
+        Ok(Box::new(NativeTlsFactory {
+            cfg: Self::build_config(config)?,
+            opts: SocketOptions::from(config),
+        }))
     }
 }
 
@@ -88,10 +75,7 @@ pub struct NativeTlsConnector {
     inner: TlsConnector,
     domain: String,
     addr: String,
-    connect_timeout: Option<Duration>,
-    read_timeout: Option<Duration>,
-    write_timeout: Option<Duration>,
-    tcp_nodelay: bool,
+    opts: SocketOptions,
 }
 
 impl NativeTlsConnector {
@@ -99,32 +83,20 @@ impl NativeTlsConnector {
         cfg: TlsConnector,
         addr: impl Into<String>,
         domain: impl Into<String>,
-        connect_timeout: Option<Duration>,
-        read_timeout: Option<Duration>,
-        write_timeout: Option<Duration>,
-        tcp_nodelay: bool,
+        opts: SocketOptions,
     ) -> Self {
         Self {
             inner: cfg,
             domain: domain.into(),
             addr: addr.into(),
-            connect_timeout,
-            read_timeout,
-            write_timeout,
-            tcp_nodelay,
+            opts,
         }
     }
 }
 
 impl Connector for NativeTlsConnector {
     fn connect(&self) -> Result<Box<dyn Transport>> {
-        let sock = dial(
-            self.addr.as_str(),
-            self.connect_timeout,
-            self.read_timeout,
-            self.write_timeout,
-            self.tcp_nodelay,
-        )?;
+        let sock = dial(self.addr.as_str(), &self.opts)?;
         let tls_stream = self.inner.connect(&self.domain, sock)?;
         Ok(Box::new(tls_stream))
     }

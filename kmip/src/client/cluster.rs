@@ -36,7 +36,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{Connector, Transport};
+use super::{Connector, Transport, is_disconnect};
 use crate::{Error, Result};
 
 /// Default per-endpoint cooldown window.
@@ -96,14 +96,7 @@ impl ClusterConfig {
         domain: impl Into<String>,
     ) -> Self {
         let domain = domain.into();
-        Self {
-            endpoints: addrs
-                .into_iter()
-                .map(|addr| (addr.into(), domain.clone()))
-                .collect(),
-            mode: ClusterMode::default(),
-            cooldown: DEFAULT_RETRY_COOLDOWN,
-        }
+        Self::with_endpoints(addrs.into_iter().map(|addr| (addr.into(), domain.clone())))
     }
 
     /// A cluster whose nodes present per-host certificates: each endpoint pairs
@@ -156,6 +149,10 @@ fn mark_failed(health: &Health) {
     *health.lock().expect("cluster cooldown mutex poisoned") = Some(Instant::now());
 }
 
+fn clear_failed(health: &Health) {
+    *health.lock().expect("cluster cooldown mutex poisoned") = None;
+}
+
 struct Endpoint {
     /// Human-readable identifier (the `host:port` address) for logs and errors.
     label: String,
@@ -181,19 +178,18 @@ struct MonitoredTransport {
 
 impl MonitoredTransport {
     /// Whether `e` means the connection failed, rather than an application
-    /// level or transient condition. Timeouts count: a node that accepts and
-    /// then goes silent is what the cooldown is for.
+    /// level or transient condition.
+    ///
+    /// The shared [`is_disconnect`] set, plus the kinds that mean the node
+    /// accepted and then went silent — which a dial cannot see and the cooldown
+    /// exists for, but which the client's retry loop deliberately does not
+    /// treat as recoverable.
     fn is_connection_failure(e: &io::Error) -> bool {
-        matches!(
-            e.kind(),
-            ErrorKind::UnexpectedEof
-                | ErrorKind::ConnectionReset
-                | ErrorKind::ConnectionAborted
-                | ErrorKind::BrokenPipe
-                | ErrorKind::NotConnected
-                | ErrorKind::TimedOut
-                | ErrorKind::WouldBlock
-        )
+        is_disconnect(e)
+            || matches!(
+                e.kind(),
+                ErrorKind::NotConnected | ErrorKind::TimedOut | ErrorKind::WouldBlock
+            )
     }
 
     /// Blames the node for a read until the connection has served something.
@@ -249,18 +245,12 @@ pub struct ClusterConnector {
 }
 
 impl ClusterConnector {
-    /// Builds a [`ClusterMode::Failover`] connector. Each item is a
-    /// `(label, connector)` pair, where `label` is the endpoint's `host:port`
-    /// address (used in logs and errors). Returns an error if the pool is empty.
+    /// Builds a connector over `connectors`. Each item is a `(label, connector)`
+    /// pair, where `label` is the endpoint's `host:port` address (used in logs
+    /// and errors). `mode` selects the endpoint-selection strategy; pass
+    /// [`ClusterMode::default`] for plain failover. Returns an error if the pool
+    /// is empty.
     pub fn new(
-        connectors: impl IntoIterator<Item = (String, Arc<dyn Connector>)>,
-        cooldown: Duration,
-    ) -> Result<Self> {
-        Self::with_mode(connectors, cooldown, ClusterMode::default())
-    }
-
-    /// Like [`Self::new`], but selects the endpoint-selection [`ClusterMode`].
-    pub fn with_mode(
         connectors: impl IntoIterator<Item = (String, Arc<dyn Connector>)>,
         cooldown: Duration,
         mode: ClusterMode,
@@ -316,10 +306,10 @@ impl ClusterConnector {
     /// exchange it carries fails.
     fn attempt(&self, endpoint: &Endpoint) -> Result<Box<dyn Transport>> {
         let result = endpoint.connector.connect();
-        *endpoint
-            .health
-            .lock()
-            .expect("cluster cooldown mutex poisoned") = result.is_err().then(Instant::now);
+        match &result {
+            Ok(_) => clear_failed(&endpoint.health),
+            Err(_) => mark_failed(&endpoint.health),
+        }
         result.map(|inner| {
             Box::new(MonitoredTransport {
                 inner,
@@ -339,19 +329,26 @@ impl Connector for ClusterConnector {
     fn connect(&self) -> Result<Box<dyn Transport>> {
         let n = self.endpoints.len();
         let start = self.start_index();
-        // Record skipped endpoints too: an error naming only what we happened
-        // to dial reads as a smaller outage than it is.
-        let mut failures: Vec<String> = Vec::new();
-        let mut dialed = false;
+        let (live, cooling): (Vec<_>, Vec<_>) = (0..n)
+            .map(|offset| &self.endpoints[(start + offset) % n])
+            .partition(|endpoint| {
+                let cooling = self.in_cooldown(endpoint);
+                if cooling {
+                    tracing::debug!(endpoint = %endpoint.label, "skipping cluster endpoint in cooldown");
+                }
+                !cooling
+            });
 
-        for offset in 0..n {
-            let endpoint = &self.endpoints[(start + offset) % n];
-            if self.in_cooldown(endpoint) {
-                tracing::debug!(endpoint = %endpoint.label, "skipping cluster endpoint in cooldown");
-                failures.push(format!("{}: skipped (in cooldown)", endpoint.label));
-                continue;
-            }
-            dialed = true;
+        // With nothing live, every endpoint is cooling: probe them all once
+        // (ignoring cooldown) so a recovered node — not just the start endpoint
+        // — can bring the cluster back.
+        let all_cooling = live.is_empty();
+        if all_cooling {
+            tracing::debug!("all cluster endpoints cooling; probing each once");
+        }
+
+        let mut failures: Vec<String> = Vec::new();
+        for endpoint in if all_cooling { &cooling } else { &live } {
             match self.attempt(endpoint) {
                 Ok(transport) => {
                     tracing::debug!(endpoint = %endpoint.label, "cluster endpoint connected");
@@ -364,26 +361,15 @@ impl Connector for ClusterConnector {
             }
         }
 
-        // Nothing was dialed above: every endpoint is in cooldown. Probe them
-        // all once (ignoring cooldown) so a recovered node — not just the start
-        // endpoint — can bring the cluster back.
-        if !dialed {
-            tracing::debug!("all cluster endpoints cooling; probing each once");
-            // All of them are about to be dialed, so drop the cooldown notes.
-            failures.clear();
-            for offset in 0..n {
-                let endpoint = &self.endpoints[(start + offset) % n];
-                match self.attempt(endpoint) {
-                    Ok(transport) => {
-                        tracing::debug!(endpoint = %endpoint.label, "cluster endpoint recovered");
-                        return Ok(transport);
-                    }
-                    Err(error) => {
-                        tracing::warn!(endpoint = %endpoint.label, %error, "cluster endpoint probe failed");
-                        failures.push(format!("{}: {error}", endpoint.label));
-                    }
-                }
-            }
+        // Name the endpoints we skipped too: an error listing only what we
+        // happened to dial reads as a smaller outage than it is. When all were
+        // cooling they were all just dialed, so there is nothing to add.
+        if !all_cooling {
+            failures.extend(
+                cooling
+                    .iter()
+                    .map(|endpoint| format!("{}: skipped (in cooldown)", endpoint.label)),
+            );
         }
 
         Err(Error::ClusterUnavailable(failures.join("; ")))
@@ -440,7 +426,7 @@ mod tests {
         cooldown: Duration,
         mode: ClusterMode,
     ) -> ClusterConnector {
-        let c = ClusterConnector::with_mode(
+        let c = ClusterConnector::new(
             endpoints
                 .iter()
                 .enumerate()
@@ -459,6 +445,7 @@ mod tests {
         let r = ClusterConnector::new(
             Vec::<(String, Arc<dyn Connector>)>::new(),
             DEFAULT_RETRY_COOLDOWN,
+            ClusterMode::default(),
         );
         assert!(r.is_err());
     }
@@ -704,7 +691,7 @@ mod tests {
         // pin to it.
         let wedged = WedgedConnector::new();
         let healthy = healthy();
-        let c = ClusterConnector::with_mode(
+        let c = ClusterConnector::new(
             vec![
                 ("ep0".to_string(), wedged.clone() as Arc<dyn Connector>),
                 ("ep1".to_string(), healthy.clone() as Arc<dyn Connector>),

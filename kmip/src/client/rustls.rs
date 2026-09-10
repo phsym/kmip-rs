@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use rustls::{
     ClientConfig, ClientConnection, RootCertStore, StreamOwned,
@@ -11,77 +11,47 @@ use rustls_platform_verifier::BuilderVerifierExt;
 
 use crate::{Error, Result};
 
-use super::{Connector, ConnectorConfig, Transport, TransportBackend, dial};
+use super::{
+    Connector, ConnectorConfig, ConnectorFactory, SocketOptions, Transport, TransportBackend, dial,
+};
 
 pub struct RustlsConnector {
     cfg: Arc<ClientConfig>,
     domain: String,
     addr: String,
-    connect_timeout: Option<Duration>,
-    read_timeout: Option<Duration>,
-    write_timeout: Option<Duration>,
-    tcp_nodelay: bool,
+    opts: SocketOptions,
 }
 
 impl RustlsConnector {
+    /// Builds a connector over an already-shared [`ClientConfig`], so a cluster
+    /// shares one parsed config across its endpoints instead of one per endpoint.
     pub fn new(
-        cfg: ClientConfig,
-        addr: impl Into<String>,
-        domain: impl Into<String>,
-        connect_timeout: Option<Duration>,
-        read_timeout: Option<Duration>,
-        write_timeout: Option<Duration>,
-        tcp_nodelay: bool,
-    ) -> Self {
-        Self::from_shared(
-            Arc::new(cfg),
-            addr,
-            domain,
-            connect_timeout,
-            read_timeout,
-            write_timeout,
-            tcp_nodelay,
-        )
-    }
-
-    /// Builds a connector reusing an already-shared [`ClientConfig`], so a
-    /// cluster pool can share one parsed config instead of one per endpoint.
-    fn from_shared(
         cfg: Arc<ClientConfig>,
         addr: impl Into<String>,
         domain: impl Into<String>,
-        connect_timeout: Option<Duration>,
-        read_timeout: Option<Duration>,
-        write_timeout: Option<Duration>,
-        tcp_nodelay: bool,
+        opts: SocketOptions,
     ) -> Self {
         Self {
             cfg,
             domain: domain.into(),
             addr: addr.into(),
-            connect_timeout,
-            read_timeout,
-            write_timeout,
-            tcp_nodelay,
+            opts,
         }
     }
 }
 
 impl Connector for RustlsConnector {
     fn connect(&self) -> Result<Box<dyn Transport>> {
+        // Dial first: building the `ClientConnection` generates a ClientHello
+        // and an ephemeral keypair, which a failed dial would throw away. That
+        // is the common case in a cluster failover sweep.
+        let mut sock = dial(self.addr.as_str(), &self.opts)?;
         let mut conn = ClientConnection::new(
             self.cfg.clone(),
             self.domain
                 .clone()
                 .try_into()
                 .map_err(|e: InvalidDnsNameError| Error::TLS(e.into()))?,
-        )?;
-        let mut sock = dial(
-            self.addr.as_str(),
-            self.connect_timeout,
-            self.read_timeout,
-            self.write_timeout,
-            self.tcp_nodelay,
         )?;
         // Drive the TLS handshake to completion right now
         conn.complete_io(&mut sock)?;
@@ -128,47 +98,30 @@ impl RustlsBackend {
     }
 }
 
-impl TransportBackend for RustlsBackend {
-    fn create_connector(
-        &self,
-        config: &ConnectorConfig,
-        addr: String,
-        domain: &str,
-    ) -> Result<Arc<dyn Connector>> {
-        let cfg = Self::build_config(config)?;
-        Ok(Arc::new(RustlsConnector::from_shared(
-            cfg,
+/// The parsed CA roots + client identity, shared by every connector this
+/// backend hands out.
+struct RustlsFactory {
+    cfg: Arc<ClientConfig>,
+    opts: SocketOptions,
+}
+
+impl ConnectorFactory for RustlsFactory {
+    fn connector(&self, addr: String, domain: &str) -> Arc<dyn Connector> {
+        Arc::new(RustlsConnector::new(
+            self.cfg.clone(),
             addr,
             domain,
-            config.connect_timeout,
-            config.read_timeout,
-            config.write_timeout,
-            config.tcp_nodelay,
-        )))
+            self.opts,
+        ))
     }
+}
 
-    fn create_connectors(
-        &self,
-        config: &ConnectorConfig,
-        endpoints: &[(String, String)],
-    ) -> Result<Vec<Arc<dyn Connector>>> {
-        // Parse the CA bundle + identity once and share the resulting config
-        // across every endpoint's connector.
-        let cfg = Self::build_config(config)?;
-        Ok(endpoints
-            .iter()
-            .map(|(addr, domain)| {
-                Arc::new(RustlsConnector::from_shared(
-                    cfg.clone(),
-                    addr.clone(),
-                    domain.clone(),
-                    config.connect_timeout,
-                    config.read_timeout,
-                    config.write_timeout,
-                    config.tcp_nodelay,
-                )) as Arc<dyn Connector>
-            })
-            .collect())
+impl TransportBackend for RustlsBackend {
+    fn prepare(&self, config: &ConnectorConfig) -> Result<Box<dyn ConnectorFactory>> {
+        Ok(Box::new(RustlsFactory {
+            cfg: Self::build_config(config)?,
+            opts: SocketOptions::from(config),
+        }))
     }
 }
 

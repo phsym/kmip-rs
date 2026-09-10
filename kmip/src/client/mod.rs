@@ -100,6 +100,33 @@ pub struct ConnectorConfig {
     pub tcp_nodelay: bool,
 }
 
+/// The socket-level subset of [`ConnectorConfig`]: the options applied to the
+/// `TcpStream` when dialing, and nothing else. The four values always travel
+/// together, so connectors store and pass this one `Copy` value rather than four
+/// positional `Option<Duration>` / `bool` parameters that transpose silently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SocketOptions {
+    /// TCP connect timeout applied per resolved address. `None` uses the OS default.
+    pub connect_timeout: Option<Duration>,
+    /// Read timeout applied before the handshake. `None` blocks indefinitely.
+    pub read_timeout: Option<Duration>,
+    /// Write timeout applied before the handshake. `None` blocks indefinitely.
+    pub write_timeout: Option<Duration>,
+    /// Whether `TCP_NODELAY` is set on the socket.
+    pub tcp_nodelay: bool,
+}
+
+impl From<&ConnectorConfig> for SocketOptions {
+    fn from(config: &ConnectorConfig) -> Self {
+        Self {
+            connect_timeout: config.connect_timeout,
+            read_timeout: config.read_timeout,
+            write_timeout: config.write_timeout,
+            tcp_nodelay: config.tcp_nodelay,
+        }
+    }
+}
+
 impl Default for ConnectorConfig {
     /// Trusts only the backend's default roots, no client identity, the default
     /// 30s read/write timeouts, and `TCP_NODELAY` enabled.
@@ -115,41 +142,54 @@ impl Default for ConnectorConfig {
     }
 }
 
+/// Stamps out [`Connector`]s that share one backend's already-prepared TLS
+/// state, returned by [`TransportBackend::prepare`].
+///
+/// Building a connector is infallible: everything that can fail — parsing the
+/// CA bundle, loading the client identity, validating the socket options — has
+/// already happened in `prepare`. That is what lets a cluster pay those costs
+/// once for the whole endpoint pool.
+pub trait ConnectorFactory: Send + Sync {
+    /// Builds a connector for `addr`, validated against `domain`.
+    fn connector(&self, addr: String, domain: &str) -> Arc<dyn Connector>;
+}
+
 pub trait TransportBackend: 'static + Send + Sync {
+    /// Parses the CA bundle and client identity into whatever shared TLS state
+    /// this backend needs, returning a factory that builds connectors from it.
+    ///
+    /// This is the one method a backend implements; both
+    /// [`create_connector`](Self::create_connector) and
+    /// [`create_connectors`](Self::create_connectors) are derived from it, so
+    /// the single- and multi-endpoint paths cannot drift, and "expensive state
+    /// is built once" holds by construction rather than by convention.
+    fn prepare(&self, config: &ConnectorConfig) -> Result<Box<dyn ConnectorFactory>>;
+
+    /// Builds a single connector for `addr`, validated against `domain`.
     fn create_connector(
         &self,
         config: &ConnectorConfig,
         addr: String,
         domain: &str,
-    ) -> Result<Arc<dyn Connector>>;
+    ) -> Result<Arc<dyn Connector>> {
+        Ok(self.prepare(config)?.connector(addr, domain))
+    }
 
-    /// Builds a connector for each `(addr, domain)` endpoint of a cluster.
-    ///
-    /// The default builds each independently via [`Self::create_connector`].
-    /// Backends override this to share expensive TLS state (parsed CA bundle /
-    /// client identity) across the pool instead of rebuilding it per endpoint.
+    /// Builds a connector for each `(addr, domain)` endpoint, all sharing one
+    /// prepared TLS state instead of rebuilding it per endpoint.
     fn create_connectors(
         &self,
         config: &ConnectorConfig,
         endpoints: &[(String, String)],
     ) -> Result<Vec<Arc<dyn Connector>>> {
-        endpoints
+        let factory = self.prepare(config)?;
+        Ok(endpoints
             .iter()
-            .map(|(addr, domain)| self.create_connector(config, addr.clone(), domain))
-            .collect()
+            .map(|(addr, domain)| factory.connector(addr.clone(), domain))
+            .collect())
     }
 }
 
-/// Configures how [`Client`] connections are opened (TLS backend, certificates,
-/// socket options, protocol settings), independently of which server they
-/// target. The address is supplied later, per connection.
-///
-/// Obtain one from [`Client::builder`] (rustls default backend) or
-/// [`ClientBuilder::new`] (explicit backend), set the options, then call
-/// [`connect`](Self::connect) to open a [`Client`] or, with the `pool` feature,
-/// `pool` to seed a connection pool. A single builder can target several servers
-/// by calling [`connect`](Self::connect) more than once with different
-/// addresses.
 /// Rejects a zero socket timeout.
 ///
 /// The `TcpStream` setters refuse `Duration::ZERO`, so zero is not "no timeout"
@@ -164,6 +204,16 @@ fn checked_timeout(name: &str, timeout: Option<Duration>) -> Result<Option<Durat
     Ok(timeout)
 }
 
+/// Configures how [`Client`] connections are opened (TLS backend, certificates,
+/// socket options, protocol settings), independently of which server they
+/// target. The address is supplied later, per connection.
+///
+/// Obtain one from [`Client::builder`] (rustls default backend) or
+/// [`ClientBuilder::new`] (explicit backend), set the options, then call
+/// [`connect`](Self::connect) to open a [`Client`] or, with the `pool` feature,
+/// `pool` to seed a connection pool. A single builder can target several servers
+/// by calling [`connect`](Self::connect) more than once with different
+/// addresses.
 #[must_use = "builder must be used to create a client or pool"]
 pub struct ClientBuilder {
     // Transport-layer config handed to the TLS backend to build a connector.
@@ -318,7 +368,7 @@ impl ClientBuilder {
             .into_iter()
             .map(|(addr, _domain)| addr)
             .zip(connectors);
-        let cluster = ClusterConnector::with_mode(labelled, cooldown, mode)?;
+        let cluster = ClusterConnector::new(labelled, cooldown, mode)?;
         Ok(self.build_with_connector(Arc::new(cluster)))
     }
 
@@ -393,6 +443,22 @@ fn configure_stream(
     Ok(())
 }
 
+/// Whether `e` means the connection itself died, rather than an application
+/// level or transient condition. Single-sourced here because both the client's
+/// reconnect-and-retry guard and the cluster connector's endpoint health
+/// tracking classify the same errors; see
+/// [`MonitoredTransport`](cluster::MonitoredTransport), which treats these plus
+/// a few "never answered" kinds as the endpoint's fault.
+pub(crate) fn is_disconnect(e: &io::Error) -> bool {
+    matches!(
+        e.kind(),
+        ErrorKind::UnexpectedEof
+            | ErrorKind::ConnectionReset
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::BrokenPipe
+    )
+}
+
 /// Opens a TCP connection to `addr` (a `"host:port"` string, re-resolved on
 /// every call) and applies the shared socket options. Used by every TLS
 /// backend to dial the server before running its handshake.
@@ -404,36 +470,32 @@ fn configure_stream(
 /// take up to N × `connect_timeout` before `dial` gives up, but each address
 /// gets a full budget so a black-holed one does not consume another's. `None`
 /// uses the OS default.
-pub(crate) fn dial(
-    addr: &str,
-    connect_timeout: Option<Duration>,
-    read_timeout: Option<Duration>,
-    write_timeout: Option<Duration>,
-    tcp_nodelay: bool,
-) -> io::Result<TcpStream> {
-    let stream = match connect_timeout {
+pub(crate) fn dial(addr: &str, opts: &SocketOptions) -> io::Result<TcpStream> {
+    let stream = match opts.connect_timeout {
         Some(timeout) => {
-            let mut last_err = None;
+            // Seeded with the "resolved to nothing" error, then overwritten by
+            // each address's real failure, so the fallback needs no second
+            // layer of `unwrap_or_else`.
+            let mut last_err = io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("no addresses resolved for {addr}"),
+            );
             addr.to_socket_addrs()?
-                .find_map(|sa| match TcpStream::connect_timeout(&sa, timeout) {
-                    Ok(stream) => Some(stream),
-                    Err(e) => {
-                        last_err = Some(e);
-                        None
-                    }
+                .find_map(|sa| {
+                    TcpStream::connect_timeout(&sa, timeout)
+                        .map_err(|e| last_err = e)
+                        .ok()
                 })
-                .ok_or_else(|| {
-                    last_err.unwrap_or_else(|| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            format!("no addresses resolved for {addr}"),
-                        )
-                    })
-                })?
+                .ok_or(last_err)?
         }
         None => TcpStream::connect(addr)?,
     };
-    configure_stream(&stream, read_timeout, write_timeout, tcp_nodelay)?;
+    configure_stream(
+        &stream,
+        opts.read_timeout,
+        opts.write_timeout,
+        opts.tcp_nodelay,
+    )?;
     Ok(stream)
 }
 
@@ -560,12 +622,6 @@ impl Client {
         self.config.connect()
     }
 
-    /// Whether the last exchange left the connection unusable (see `broken`).
-    /// The client re-dials on next use; the pool discards instead of recycling.
-    pub(crate) fn is_broken(&self) -> bool {
-        self.broken
-    }
-
     pub fn version(&mut self) -> crate::Result<ProtocolVersion> {
         if let Some(v) = self.config.version.get() {
             return Ok(*v);
@@ -658,16 +714,7 @@ impl Client {
                 // All of these are recoverable by re-dialing and retrying, which
                 // is what lets pooled clients self-heal a connection that died
                 // between checkouts.
-                Err(ttlv::Error::Io(e))
-                    if retry > 0
-                        && matches!(
-                            e.kind(),
-                            ErrorKind::UnexpectedEof
-                                | ErrorKind::ConnectionReset
-                                | ErrorKind::ConnectionAborted
-                                | ErrorKind::BrokenPipe
-                        ) =>
-                {
+                Err(ttlv::Error::Io(e)) if retry > 0 && is_disconnect(&e) => {
                     tracing::warn!("I/O error during request/response roundtrip: {e:?}");
                     tracing::warn!(
                         "Attempting to reconnect and retry the request ({retry} retries left)",
