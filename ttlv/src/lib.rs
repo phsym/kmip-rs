@@ -7,6 +7,9 @@ mod io;
 mod tags;
 mod types;
 
+#[cfg(feature = "io-async")]
+mod io_async;
+
 use std::{
     borrow::Cow,
     fmt,
