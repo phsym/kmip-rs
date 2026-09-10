@@ -43,7 +43,7 @@ use std::time::Duration;
 
 pub use r2d2;
 
-use super::{Client, ClientBuilder, ClientConfig};
+use super::{Client, ClientBuilder, ClientConfig, ClusterConfig};
 use crate::{RequestMessage, payloads::DiscoverVersionsRequestPayload, types::ProtocolVersion};
 
 impl Client {
@@ -98,10 +98,11 @@ impl r2d2::ManageConnection for KmipConnectionManager {
         conn.probe()
     }
 
-    fn has_broken(&self, _conn: &mut Client) -> bool {
-        // The client transparently reconnects and retries on a dropped
-        // connection, so a checked-in client is always considered reusable.
-        false
+    fn has_broken(&self, conn: &mut Client) -> bool {
+        // A client whose last exchange failed after the request went out may
+        // hold an unread response. Recycling it would let the next caller
+        // decode the *previous* caller's response as its own.
+        conn.is_broken()
     }
 }
 
@@ -128,6 +129,46 @@ impl ClientBuilder {
     /// every pooled connection.
     pub fn pool(&self, addr: impl Into<String>, domain: &str) -> crate::Result<ClientPoolBuilder> {
         let config = self.build(addr, domain)?;
+        Ok(ClientPoolBuilder::new(KmipConnectionManager::new(config)))
+    }
+
+    /// Builds the transport and starts a [`ClientPool`] builder over a
+    /// *cluster* of endpoints, combining pooling with the failover and load
+    /// balancing of [`connect_cluster`](ClientBuilder::connect_cluster).
+    ///
+    /// Every connection the pool opens runs endpoint selection independently,
+    /// so the pool spreads across the cluster under
+    /// [`RoundRobin`](super::ClusterMode::RoundRobin) and drains away from a
+    /// failing node under [`Failover`](super::ClusterMode::Failover). See
+    /// [`ClusterConfig`] for the endpoints, mode, and cooldown.
+    ///
+    /// The reconnect caveat of
+    /// [`connect_cluster`](ClientBuilder::connect_cluster) applies: a pooled
+    /// client that reconnects mid-session may resume on a different node, so a
+    /// re-sent non-idempotent request can be executed twice.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use kmip::client::{Client, ClusterConfig, ClusterMode};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let pool = Client::builder()
+    ///     .add_root_certificate_file("ca.pem")?
+    ///     .pool_cluster(
+    ///         ClusterConfig::with_shared_domain(
+    ///             ["kmip-1.example.com:5696", "kmip-2.example.com:5696"],
+    ///             "kmip.example.com",
+    ///         )
+    ///         .mode(ClusterMode::RoundRobin),
+    ///     )?
+    ///     .max_size(8)
+    ///     .build()?;
+    /// # let _ = pool;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn pool_cluster(&self, config: ClusterConfig) -> crate::Result<ClientPoolBuilder> {
+        let config = self.build_cluster(config)?;
         Ok(ClientPoolBuilder::new(KmipConnectionManager::new(config)))
     }
 }
@@ -249,9 +290,29 @@ impl ClientPoolBuilder {
     /// Escape hatch for [`r2d2::Builder`] options not surfaced above (custom
     /// error/event handlers, connection customizer, thread pool, …).
     ///
-    /// Note that `max_size` and `min_idle` are owned by the dedicated setters
-    /// above and applied at [`build`](Self::build) time, so setting them through
-    /// this closure has no effect.
+    /// # Panics
+    ///
+    /// The raw [`r2d2::Builder`] validates eagerly with `assert!`, unlike the
+    /// wrapper's setters which defer to [`build`](Self::build). An out of range
+    /// `max_size`, `connection_timeout`, `idle_timeout` or `max_lifetime` set
+    /// inside this closure panics *here*, before `build` runs, so `build`'s
+    /// no-panic promise does not cover values routed through it. Prefer the
+    /// dedicated setters for those four, especially for values derived at
+    /// runtime where `0` is plausible:
+    ///
+    /// ```no_run
+    /// # use kmip::client::ClientPoolBuilder;
+    /// # fn f(builder: ClientPoolBuilder, secs: u64) -> kmip::Result<()> {
+    /// # let pool =
+    /// // `Duration::from_secs(0)` returns an error here …
+    /// builder.connection_timeout(std::time::Duration::from_secs(secs)).build()?;
+    /// // … but would panic inside `.configure(|b| b.connection_timeout(..))`.
+    /// # let _ = pool; Ok(()) }
+    /// ```
+    ///
+    /// `max_size` and `min_idle` are re-applied at [`build`](Self::build) time,
+    /// so a value set for them here is overwritten (a valid one is silently
+    /// discarded; an invalid one still panics first).
     #[must_use]
     pub fn configure(
         mut self,
@@ -303,6 +364,152 @@ mod tests {
     fn pool_builder(addr: String) -> ClientPoolBuilder {
         let config = ClientConfig::new(Arc::new(LocalConnector(addr)));
         ClientPoolBuilder::new(KmipConnectionManager::new(config))
+    }
+
+    /// Gives up on a silent server quickly, so the stalled-response case does
+    /// not need a 30s wait.
+    struct ImpatientConnector(String);
+
+    impl crate::client::Connector for ImpatientConnector {
+        fn connect(&self) -> crate::Result<Box<dyn crate::client::Transport>> {
+            let stream = std::net::TcpStream::connect(self.0.as_str())?;
+            stream.set_read_timeout(Some(Duration::from_millis(200)))?;
+            Ok(Box::new(stream))
+        }
+    }
+
+    /// Accepts and then stalls: the request lands, the response never comes,
+    /// and the caller gives up while still owed one.
+    fn stalling_server() -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let handle = std::thread::spawn(move || {
+            // Hold the connection open without ever replying.
+            if let Ok((stream, _)) = listener.accept() {
+                std::thread::sleep(Duration::from_secs(2));
+                drop(stream);
+            }
+        });
+        (addr, handle)
+    }
+
+    #[test]
+    fn a_client_whose_response_never_arrived_is_not_recycled() {
+        // A connection with an unread response must not reach the next caller:
+        // the queued response belongs to the previous request, and nothing in
+        // the protocol path would notice the mismatch.
+        let (addr, server) = stalling_server();
+
+        let config = ClientConfig::new(Arc::new(ImpatientConnector(addr)));
+        let manager = KmipConnectionManager::new(config);
+
+        use r2d2::ManageConnection as _;
+
+        let mut client = manager.connect().unwrap();
+        assert!(
+            !manager.has_broken(&mut client),
+            "a fresh connection is reusable"
+        );
+
+        // The request goes out; the response never comes.
+        assert!(client.probe().is_err(), "expected the exchange to time out");
+
+        assert!(
+            manager.has_broken(&mut client),
+            "a connection left holding an unread response must not be recycled"
+        );
+
+        drop(client);
+        let _ = server.join();
+    }
+
+    /// Counts the connections one cluster endpoint was asked to open.
+    struct CountingConnector {
+        inner: LocalConnector,
+        dials: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CountingConnector {
+        fn new(addr: &str) -> Arc<Self> {
+            Arc::new(Self {
+                inner: LocalConnector(addr.to_string()),
+                dials: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+        fn dials(&self) -> usize {
+            self.dials.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl crate::client::Connector for CountingConnector {
+        fn connect(&self) -> crate::Result<Box<dyn crate::client::Transport>> {
+            self.dials.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.connect()
+        }
+    }
+
+    #[test]
+    fn pool_over_a_cluster_spreads_connections_across_endpoints() {
+        use crate::client::{ClusterConnector, ClusterMode, Connector};
+
+        // The combination `pool_cluster` exists to make reachable. Both
+        // endpoints dial the same listener, so this asserts on the selection,
+        // not the socket. Plain TCP, so no TLS server is needed.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let (ep_a, ep_b) = (CountingConnector::new(&addr), CountingConnector::new(&addr));
+
+        let cluster = ClusterConnector::with_mode(
+            vec![
+                ("ep_a".to_string(), ep_a.clone() as Arc<dyn Connector>),
+                ("ep_b".to_string(), ep_b.clone() as Arc<dyn Connector>),
+            ],
+            Duration::from_secs(5),
+            ClusterMode::RoundRobin,
+        )
+        .unwrap();
+
+        let config = ClientConfig::new(Arc::new(cluster));
+        let pool = ClientPoolBuilder::new(KmipConnectionManager::new(config))
+            .max_size(2)
+            .min_idle(Some(2))
+            .build()
+            .unwrap();
+
+        assert_eq!(pool.state().connections, 2);
+        // The start index advances per connection, so two land one on each
+        // endpoint whatever the random seed.
+        assert_eq!(ep_a.dials(), 1, "endpoint A got no connection");
+        assert_eq!(ep_b.dials(), 1, "endpoint B got no connection");
+    }
+
+    #[cfg(feature = "default-tls-rustls")]
+    #[test]
+    fn pool_cluster_builds_a_pool_builder_without_connecting() {
+        use crate::client::ClusterConfig;
+
+        // Nothing is dialed until `build()`, so this succeeds with nothing
+        // listening.
+        assert!(
+            Client::builder()
+                .pool_cluster(ClusterConfig::with_shared_domain(
+                    ["127.0.0.1:1", "127.0.0.2:1"],
+                    "localhost",
+                ))
+                .is_ok()
+        );
+    }
+
+    #[cfg(feature = "default-tls-rustls")]
+    #[test]
+    fn pool_cluster_rejects_an_empty_endpoint_list() {
+        assert!(matches!(
+            Client::builder().pool_cluster(ClusterConfig::with_shared_domain(
+                Vec::<String>::new(),
+                "localhost",
+            )),
+            Err(crate::Error::ClusterUnavailable(_))
+        ));
     }
 
     #[test]

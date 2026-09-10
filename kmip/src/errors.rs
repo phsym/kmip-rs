@@ -38,6 +38,8 @@ pub enum Error {
     PoolConfig(String),
     #[error("no cluster endpoint could be reached: {0}")]
     ClusterUnavailable(String),
+    #[error("Invalid client configuration: {0}")]
+    Config(String),
 }
 
 #[cfg(feature = "tls-rustls")]

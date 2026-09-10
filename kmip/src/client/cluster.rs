@@ -28,6 +28,7 @@
 
 use std::{
     hash::{BuildHasher, Hasher, RandomState},
+    io::{self, ErrorKind, Read, Write},
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -146,13 +147,92 @@ impl ClusterConfig {
     }
 }
 
+/// Instant of one endpoint's last observed failure, `None` if healthy. Shared
+/// with the connections handed out for that endpoint so a node that fails after
+/// the dial still cools down.
+type Health = Arc<Mutex<Option<Instant>>>;
+
+fn mark_failed(health: &Health) {
+    *health.lock().expect("cluster cooldown mutex poisoned") = Some(Instant::now());
+}
+
 struct Endpoint {
     /// Human-readable identifier (the `host:port` address) for logs and errors.
     label: String,
     connector: Arc<dyn Connector>,
-    /// Instant of the last failed dial, or `None` if the last dial succeeded /
-    /// none has happened yet. Endpoints inside the cooldown window are skipped.
-    last_failure: Mutex<Option<Instant>>,
+    health: Health,
+}
+
+/// A cluster connection that reports its failures to the endpoint it came from.
+///
+/// A successful dial only proves the node accepts TCP and TLS. Without this, a
+/// node whose listener is up but whose service is wedged would clear its
+/// cooldown on every dial and [`ClusterMode::Failover`] would pin to it while
+/// healthy nodes sit idle.
+///
+/// Only failures before the connection has served a byte count against the
+/// node. After that a drop is the connection's own (an idle reaper, a
+/// mid-session reset) and says nothing about node health.
+struct MonitoredTransport {
+    inner: Box<dyn Transport>,
+    health: Health,
+    served: bool,
+}
+
+impl MonitoredTransport {
+    /// Whether `e` means the connection failed, rather than an application
+    /// level or transient condition. Timeouts count: a node that accepts and
+    /// then goes silent is what the cooldown is for.
+    fn is_connection_failure(e: &io::Error) -> bool {
+        matches!(
+            e.kind(),
+            ErrorKind::UnexpectedEof
+                | ErrorKind::ConnectionReset
+                | ErrorKind::ConnectionAborted
+                | ErrorKind::BrokenPipe
+                | ErrorKind::NotConnected
+                | ErrorKind::TimedOut
+                | ErrorKind::WouldBlock
+        )
+    }
+
+    /// Blames the node for a read until the connection has served something.
+    fn observe(&mut self, result: &io::Result<usize>) {
+        match result {
+            // A zero read is the peer hanging up. On a connection that never
+            // answered, that is the node.
+            Ok(0) if !self.served => mark_failed(&self.health),
+            Ok(_) => self.served = true,
+            Err(e) if !self.served && Self::is_connection_failure(e) => mark_failed(&self.health),
+            Err(_) => {}
+        }
+    }
+}
+
+impl Read for MonitoredTransport {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let result = self.inner.read(buf);
+        self.observe(&result);
+        result
+    }
+}
+
+impl Write for MonitoredTransport {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let result = self.inner.write(buf);
+        // A write never proves the node answered, so it can only report failure.
+        if let Err(e) = &result
+            && !self.served
+            && Self::is_connection_failure(e)
+        {
+            mark_failed(&self.health);
+        }
+        result
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 /// A [`Connector`] that dials a pool of endpoints with failover and optional
@@ -190,7 +270,7 @@ impl ClusterConnector {
             .map(|(label, connector)| Endpoint {
                 label,
                 connector,
-                last_failure: Mutex::new(None),
+                health: Arc::new(Mutex::new(None)),
             })
             .collect();
         if endpoints.is_empty() {
@@ -222,7 +302,7 @@ impl ClusterConnector {
 
     fn in_cooldown(&self, endpoint: &Endpoint) -> bool {
         endpoint
-            .last_failure
+            .health
             .lock()
             .expect("cluster cooldown mutex poisoned")
             .is_some_and(|at| at.elapsed() < self.cooldown)
@@ -230,13 +310,23 @@ impl ClusterConnector {
 
     /// Dials one endpoint, stamping its cooldown state: cleared on success, set
     /// to the current instant on failure.
+    ///
+    /// Clearing on success is provisional: a dial cannot see whether the node
+    /// serves KMIP. [`MonitoredTransport`] re-stamps the endpoint if the
+    /// exchange it carries fails.
     fn attempt(&self, endpoint: &Endpoint) -> Result<Box<dyn Transport>> {
         let result = endpoint.connector.connect();
         *endpoint
-            .last_failure
+            .health
             .lock()
             .expect("cluster cooldown mutex poisoned") = result.is_err().then(Instant::now);
-        result
+        result.map(|inner| {
+            Box::new(MonitoredTransport {
+                inner,
+                health: endpoint.health.clone(),
+                served: false,
+            }) as Box<dyn Transport>
+        })
     }
 
     #[cfg(test)]
@@ -249,14 +339,19 @@ impl Connector for ClusterConnector {
     fn connect(&self) -> Result<Box<dyn Transport>> {
         let n = self.endpoints.len();
         let start = self.start_index();
+        // Record skipped endpoints too: an error naming only what we happened
+        // to dial reads as a smaller outage than it is.
         let mut failures: Vec<String> = Vec::new();
+        let mut dialed = false;
 
         for offset in 0..n {
             let endpoint = &self.endpoints[(start + offset) % n];
             if self.in_cooldown(endpoint) {
                 tracing::debug!(endpoint = %endpoint.label, "skipping cluster endpoint in cooldown");
+                failures.push(format!("{}: skipped (in cooldown)", endpoint.label));
                 continue;
             }
+            dialed = true;
             match self.attempt(endpoint) {
                 Ok(transport) => {
                     tracing::debug!(endpoint = %endpoint.label, "cluster endpoint connected");
@@ -272,8 +367,10 @@ impl Connector for ClusterConnector {
         // Nothing was dialed above: every endpoint is in cooldown. Probe them
         // all once (ignoring cooldown) so a recovered node — not just the start
         // endpoint — can bring the cluster back.
-        if failures.is_empty() {
+        if !dialed {
             tracing::debug!("all cluster endpoints cooling; probing each once");
+            // All of them are about to be dialed, so drop the cooldown notes.
+            failures.clear();
             for offset in 0..n {
                 let endpoint = &self.endpoints[(start + offset) % n];
                 match self.attempt(endpoint) {
@@ -560,6 +657,147 @@ mod tests {
         assert!(c.connect().is_ok());
         assert_eq!(eps[0].calls(), 2);
         assert_eq!(eps[1].calls(), 1); // not re-dialed
+    }
+
+    /// Connects fine, then fails every exchange: a node whose listener is up
+    /// but whose KMIP service is wedged.
+    struct WedgedTransport;
+
+    impl io::Read for WedgedTransport {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::from(ErrorKind::ConnectionReset))
+        }
+    }
+
+    impl io::Write for WedgedTransport {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Always accepts, always hands back a wedged transport.
+    struct WedgedConnector(AtomicUsize);
+
+    impl WedgedConnector {
+        fn new() -> Arc<Self> {
+            Arc::new(Self(AtomicUsize::new(0)))
+        }
+        fn calls(&self) -> usize {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Connector for WedgedConnector {
+        fn connect(&self) -> Result<Box<dyn Transport>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(WedgedTransport))
+        }
+    }
+
+    #[test]
+    fn endpoint_that_connects_but_never_serves_enters_cooldown() {
+        // The failure a dial cannot see: ep0 accepts every connection, so
+        // `attempt` alone would clear its cooldown forever and Failover would
+        // pin to it.
+        let wedged = WedgedConnector::new();
+        let healthy = healthy();
+        let c = ClusterConnector::with_mode(
+            vec![
+                ("ep0".to_string(), wedged.clone() as Arc<dyn Connector>),
+                ("ep1".to_string(), healthy.clone() as Arc<dyn Connector>),
+            ],
+            DEFAULT_RETRY_COOLDOWN,
+            ClusterMode::Failover,
+        )
+        .unwrap();
+        c.reset_cursor();
+
+        // Failover picks ep0, which connects. Nothing looks wrong yet.
+        let mut conn = c.connect().unwrap();
+        assert_eq!(wedged.calls(), 1);
+        assert_eq!(healthy.calls(), 0);
+
+        // Request goes out, response never comes: the node is at fault.
+        let mut buf = [0u8; 8];
+        assert!(conn.write_all(b"request").is_ok());
+        assert!(conn.read(&mut buf).is_err());
+
+        // ep0 is now cooling, so the reconnect reaches the healthy node.
+        c.connect().unwrap();
+        assert_eq!(wedged.calls(), 1, "wedged endpoint must not be re-dialed");
+        assert_eq!(healthy.calls(), 1, "failover must reach the healthy node");
+    }
+
+    #[test]
+    fn connection_that_already_served_does_not_cool_its_endpoint() {
+        // A reaped idle connection dies like a wedged node's. Having served a
+        // response is what tells them apart.
+        let health: Health = Arc::new(Mutex::new(None));
+        let mut t = MonitoredTransport {
+            inner: Box::new(io::Cursor::new(b"response".to_vec())),
+            health: health.clone(),
+            served: false,
+        };
+
+        let mut buf = [0u8; 8];
+        assert!(t.read(&mut buf).unwrap() > 0);
+        assert!(t.served);
+
+        // Now the peer hangs up. The endpoint stays healthy.
+        t.inner = Box::new(WedgedTransport);
+        assert!(t.read(&mut buf).is_err());
+        assert!(
+            health.lock().unwrap().is_none(),
+            "a connection that served a response must not cool its endpoint"
+        );
+    }
+
+    #[test]
+    fn error_names_endpoints_skipped_for_cooldown() {
+        // ep0 cools, ep1 is live and fails. Reporting only ep1 would read as a
+        // one node outage.
+        let eps = [
+            ScriptedConnector::new(vec![false]),
+            ScriptedConnector::new(vec![true, false]),
+        ];
+        let c = cluster(&eps, DEFAULT_RETRY_COOLDOWN, ClusterMode::Failover);
+
+        // #1: ep0 fails (cools), ep1 serves.
+        assert!(c.connect().is_ok());
+
+        // #2: ep0 is skipped for cooldown, ep1 is dialed and fails.
+        let msg = match c.connect() {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("expected the cluster to be unreachable"),
+        };
+        assert!(msg.contains("ep0"), "cooled endpoint missing from {msg:?}");
+        assert!(msg.contains("cooldown"), "no cooldown reason in {msg:?}");
+        assert!(msg.contains("ep1"), "dialed endpoint missing from {msg:?}");
+    }
+
+    #[test]
+    fn probe_all_error_reports_dial_failures_not_cooldown_notes() {
+        // All cooling means all re-dialed, so the error carries real dial
+        // failures rather than stale cooldown notes.
+        let eps = [
+            ScriptedConnector::new(vec![false, false]),
+            ScriptedConnector::new(vec![false, false]),
+        ];
+        let c = cluster(&eps, DEFAULT_RETRY_COOLDOWN, ClusterMode::Failover);
+
+        assert!(c.connect().is_err()); // both fail, both cool
+        let msg = match c.connect() {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("expected the cluster to be unreachable"),
+        };
+        assert!(msg.contains("ep0") && msg.contains("ep1"), "{msg:?}");
+        assert!(
+            !msg.contains("cooldown"),
+            "probe-all must report real dial errors, got {msg:?}"
+        );
     }
 
     #[test]

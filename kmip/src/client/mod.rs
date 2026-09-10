@@ -76,7 +76,13 @@ const DEFAULT_SOCKET_TIMEOUT: Option<Duration> = Some(Duration::from_secs(30));
 #[non_exhaustive]
 pub struct ConnectorConfig {
     /// PEM-encoded CA/root certificate bundles to trust when verifying the
-    /// server, added on top of whatever trust the backend uses by default.
+    /// server.
+    ///
+    /// Non-empty **replaces** the backend's default trust rather than adding to
+    /// it: every backend builds its verifier from these roots alone. Platform
+    /// and public roots are no longer trusted, so a client that also reaches
+    /// publicly signed endpoints must supply their roots here too. Leave empty
+    /// for the backend defaults.
     pub root_certs: Vec<Vec<u8>>,
     /// Optional client certificate chain and private key (both PEM-encoded) used
     /// for TLS client authentication.
@@ -144,6 +150,20 @@ pub trait TransportBackend: 'static + Send + Sync {
 /// `pool` to seed a connection pool. A single builder can target several servers
 /// by calling [`connect`](Self::connect) more than once with different
 /// addresses.
+/// Rejects a zero socket timeout.
+///
+/// The `TcpStream` setters refuse `Duration::ZERO`, so zero is not "no timeout"
+/// (that is `None`) but a value that fails every dial against a healthy server.
+/// Config plumbed as `from_secs(secs)` makes it a plausible input.
+fn checked_timeout(name: &str, timeout: Option<Duration>) -> Result<Option<Duration>> {
+    if timeout == Some(Duration::ZERO) {
+        return Err(Error::Config(format!(
+            "{name} must be greater than zero; use `None` to disable it"
+        )));
+    }
+    Ok(timeout)
+}
+
 #[must_use = "builder must be used to create a client or pool"]
 pub struct ClientBuilder {
     // Transport-layer config handed to the TLS backend to build a connector.
@@ -178,6 +198,8 @@ impl ClientBuilder {
         }
     }
 
+    /// Reads a PEM-encoded CA/root bundle from `path`. See
+    /// [`add_root_certificate`](Self::add_root_certificate) for trust semantics.
     pub fn add_root_certificate_file(self, path: impl AsRef<Path>) -> io::Result<Self> {
         Ok(self.add_root_certificate(fs::read(path)?))
     }
@@ -189,6 +211,12 @@ impl ClientBuilder {
         Ok(self.identity(fs::read(cert)?, fs::read(key)?))
     }
 
+    /// Adds a PEM-encoded CA/root certificate bundle to the trusted roots.
+    ///
+    /// Adding *any* root **replaces** the backend's default trust store, so
+    /// platform and public roots stop being trusted. Add them explicitly if the
+    /// client also talks to publicly signed endpoints. See
+    /// [`ConnectorConfig::root_certs`].
     pub fn add_root_certificate(mut self, pem: Vec<u8>) -> Self {
         self.connector.root_certs.push(pem);
         self
@@ -206,16 +234,20 @@ impl ClientBuilder {
 
     /// Sets the read timeout applied to the underlying `TcpStream` before the
     /// TLS handshake. `None` disables the timeout (reads block indefinitely).
-    pub fn read_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.connector.read_timeout = timeout;
-        self
+    ///
+    /// Returns [`Error::Config`] for a zero duration; use `None` to disable.
+    pub fn read_timeout(mut self, timeout: Option<Duration>) -> Result<Self> {
+        self.connector.read_timeout = checked_timeout("read_timeout", timeout)?;
+        Ok(self)
     }
 
     /// Sets the write timeout applied to the underlying `TcpStream` before the
     /// TLS handshake. `None` disables the timeout (writes block indefinitely).
-    pub fn write_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.connector.write_timeout = timeout;
-        self
+    ///
+    /// Returns [`Error::Config`] for a zero duration; use `None` to disable.
+    pub fn write_timeout(mut self, timeout: Option<Duration>) -> Result<Self> {
+        self.connector.write_timeout = checked_timeout("write_timeout", timeout)?;
+        Ok(self)
     }
 
     /// Enables or disables `TCP_NODELAY` (Nagle's algorithm) on the underlying
@@ -229,9 +261,12 @@ impl ClientBuilder {
     /// (the default) uses the OS default, which for a dropped/black-holed host
     /// can be well over a minute — set a bound when using
     /// [`Self::connect_cluster`] so failover moves on quickly.
-    pub fn connect_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.connector.connect_timeout = timeout;
-        self
+    ///
+    /// Returns [`Error::Config`] for a zero duration (`TcpStream::connect_timeout`
+    /// refuses it, failing every dial); use `None` for the OS default.
+    pub fn connect_timeout(mut self, timeout: Option<Duration>) -> Result<Self> {
+        self.connector.connect_timeout = checked_timeout("connect_timeout", timeout)?;
+        Ok(self)
     }
 
     /// Appends a middleware to the chain of every client built here. The
@@ -265,6 +300,26 @@ impl ClientBuilder {
             .backend
             .create_connector(&self.connector, addr.into(), domain)?;
         Ok(self.build_with_connector(connector))
+    }
+
+    /// Builds a `ClientConfig` backed by a [`ClusterConnector`] over every
+    /// endpoint of `config`. Shared by [`connect_cluster`](Self::connect_cluster)
+    /// and, with the `pool` feature, `pool_cluster`. Opens no connection.
+    pub(crate) fn build_cluster(&self, config: ClusterConfig) -> Result<ClientConfig> {
+        let ClusterConfig {
+            endpoints,
+            mode,
+            cooldown,
+        } = config;
+        let connectors = self
+            .backend
+            .create_connectors(&self.connector, &endpoints)?;
+        let labelled = endpoints
+            .into_iter()
+            .map(|(addr, _domain)| addr)
+            .zip(connectors);
+        let cluster = ClusterConnector::with_mode(labelled, cooldown, mode)?;
+        Ok(self.build_with_connector(Arc::new(cluster)))
     }
 
     /// Builds the `ClientConfig` for an already-created `connector`, carrying
@@ -319,20 +374,7 @@ impl ClientBuilder {
     /// idempotent operations, or a single-endpoint [`Self::connect`], where that
     /// matters.
     pub fn connect_cluster(&self, config: ClusterConfig) -> Result<Client> {
-        let ClusterConfig {
-            endpoints,
-            mode,
-            cooldown,
-        } = config;
-        let connectors = self
-            .backend
-            .create_connectors(&self.connector, &endpoints)?;
-        let labelled = endpoints
-            .into_iter()
-            .map(|(addr, _domain)| addr)
-            .zip(connectors);
-        let cluster = ClusterConnector::with_mode(labelled, cooldown, mode)?;
-        self.build_with_connector(Arc::new(cluster)).connect()
+        self.build_cluster(config)?.connect()
     }
 
     // TODO: Add KMIP authentication
@@ -414,6 +456,12 @@ pub struct Client {
     // (populated on first use when the version was not pinned).
     config: ClientConfig,
     conn: ttlv::Stream<Box<dyn Transport>>,
+    // Set when an exchange left `conn` unusable. The dangerous case is a
+    // request written whose response was never read (a read timeout, a decode
+    // failure): the next bytes on the wire belong to the *previous* request, so
+    // reusing the stream pairs a response with the wrong request. For a pooled
+    // client that means handing one caller's response to another.
+    broken: bool,
 }
 
 /// The crate-internal, cheap-to-clone recipe for opening [`Client`]
@@ -475,6 +523,7 @@ impl ClientConfig {
         Ok(Client {
             conn: ttlv::Stream::new(self.connector.connect()?),
             config: self.clone(),
+            broken: false,
         })
     }
 }
@@ -509,6 +558,12 @@ impl Client {
     /// support. Keep cluster nodes on a common protocol version.
     pub fn try_clone(&self) -> Result<Self> {
         self.config.connect()
+    }
+
+    /// Whether the last exchange left the connection unusable (see `broken`).
+    /// The client re-dials on next use; the pool discards instead of recycling.
+    pub(crate) fn is_broken(&self) -> bool {
+        self.broken
     }
 
     pub fn version(&mut self) -> crate::Result<ProtocolVersion> {
@@ -574,7 +629,26 @@ impl Client {
         Ok(version)
     }
 
+    /// Sends `msg` and returns its response, re-dialing and retrying if the
+    /// connection died.
+    ///
+    /// Any error here marks the connection `broken`: once a request is written,
+    /// an error leaves us unsure how much of its response is still queued, so
+    /// the stream can no longer be trusted to sit at a message boundary.
     fn roundtrip_ttlv<D: Decodable>(&mut self, msg: &impl Encodable) -> Result<D> {
+        // Replace a stream left dead or mid-message, so this request cannot be
+        // answered by the tail of the previous one.
+        if self.broken {
+            tracing::debug!("Re-dialing a connection left unusable by a previous exchange");
+            self.conn = ttlv::Stream::new(self.config.connector.connect()?);
+            self.broken = false;
+        }
+        let result = self.exchange(msg);
+        self.broken = result.is_err();
+        result
+    }
+
+    fn exchange<D: Decodable>(&mut self, msg: &impl Encodable) -> Result<D> {
         //TODO: Better reconnection loop. Do we really need a retry counter here ?
         let mut retry = 3;
         loop {
@@ -751,11 +825,57 @@ mod tests {
     #[cfg(feature = "default-tls-rustls")]
     #[test]
     fn test_client_builder_connect_timeout() {
-        let builder = Client::builder().connect_timeout(Some(Duration::from_secs(3)));
+        let builder = Client::builder()
+            .connect_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
         assert_eq!(
             builder.connector.connect_timeout,
             Some(Duration::from_secs(3))
         );
+    }
+
+    #[cfg(feature = "default-tls-rustls")]
+    #[test]
+    fn zero_socket_timeouts_are_rejected() {
+        // The socket setters all reject `Duration::ZERO`, so a zero here fails
+        // every dial against a healthy server. Config plumbed as `from_secs(n)`
+        // makes 0 plausible, so it must not reach the socket.
+        for (name, result) in [
+            (
+                "connect_timeout",
+                Client::builder().connect_timeout(Some(Duration::ZERO)),
+            ),
+            (
+                "read_timeout",
+                Client::builder().read_timeout(Some(Duration::ZERO)),
+            ),
+            (
+                "write_timeout",
+                Client::builder().write_timeout(Some(Duration::ZERO)),
+            ),
+        ] {
+            match result {
+                Err(Error::Config(msg)) => {
+                    assert!(msg.contains(name), "{name}: unexpected message {msg:?}");
+                }
+                Err(e) => panic!("{name}: expected Error::Config, got {e:?}"),
+                Ok(_) => panic!("{name}: expected Error::Config, got a builder"),
+            }
+        }
+    }
+
+    #[cfg(feature = "default-tls-rustls")]
+    #[test]
+    fn none_disables_socket_timeouts_without_error() {
+        // `None` is the documented way to disable a timeout.
+        let builder = Client::builder()
+            .connect_timeout(None)
+            .and_then(|b| b.read_timeout(None))
+            .and_then(|b| b.write_timeout(None))
+            .expect("`None` must be accepted");
+        assert_eq!(builder.connector.connect_timeout, None);
+        assert_eq!(builder.connector.read_timeout, None);
+        assert_eq!(builder.connector.write_timeout, None);
     }
 
     #[test]
@@ -782,7 +902,9 @@ mod tests {
     fn test_client_builder_custom_timeouts() {
         let builder = Client::builder()
             .read_timeout(Some(Duration::from_secs(10)))
+            .unwrap()
             .write_timeout(Some(Duration::from_secs(60)))
+            .unwrap()
             .tcp_nodelay(false);
 
         assert_eq!(
@@ -799,7 +921,11 @@ mod tests {
     #[cfg(feature = "default-tls-rustls")]
     #[test]
     fn test_client_builder_disable_timeouts() {
-        let builder = Client::builder().read_timeout(None).write_timeout(None);
+        let builder = Client::builder()
+            .read_timeout(None)
+            .unwrap()
+            .write_timeout(None)
+            .unwrap();
 
         assert_eq!(builder.connector.read_timeout, None);
         assert_eq!(builder.connector.write_timeout, None);
