@@ -36,7 +36,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{Connector, Transport, is_disconnect};
+use super::{Client, ClientBuilder, ClientConfig, Connector, Transport, is_disconnect};
 use crate::{Error, Result};
 
 /// Default per-endpoint cooldown window.
@@ -137,6 +137,48 @@ impl ClusterConfig {
     pub fn cooldown(mut self, cooldown: Duration) -> Self {
         self.cooldown = cooldown;
         self
+    }
+}
+
+impl ClientBuilder {
+    /// Builds a `ClientConfig` backed by a [`ClusterConnector`] over every
+    /// endpoint of `config`. Shared by [`connect_cluster`](Self::connect_cluster)
+    /// and, with the `pool` feature, `pool_cluster`. Opens no connection.
+    pub(crate) fn build_cluster(&self, config: ClusterConfig) -> Result<ClientConfig> {
+        let ClusterConfig {
+            endpoints,
+            mode,
+            cooldown,
+        } = config;
+        // One prepared TLS state — CA bundle parsed, identity loaded — shared
+        // by every endpoint's connector rather than rebuilt per endpoint. The
+        // endpoint's address doubles as its label.
+        let factory = self.backend.prepare(&self.connector)?;
+        let labelled = endpoints.into_iter().map(|(addr, domain)| {
+            let connector = factory.connector(addr.clone(), &domain);
+            (addr, connector)
+        });
+        let cluster = ClusterConnector::new(labelled, cooldown, mode)?;
+        Ok(self.build_with_connector(Arc::new(cluster)))
+    }
+
+    /// Connects to a pool of KMIP endpoints with failover and optional load
+    /// balancing, using the configured transport backend for every endpoint. See
+    /// [`ClusterConfig`] for the endpoints, [`ClusterMode`], and cooldown.
+    ///
+    /// Each endpoint address is a `"host:port"` string, re-resolved on every
+    /// connection like [`Self::connect`].
+    ///
+    /// Note on retries: a mid-session reconnect (`roundtrip_ttlv` after an
+    /// unexpected EOF, or [`Client::try_clone`]) re-runs endpoint selection and
+    /// may land on a *different* node. A request re-sent after the peer closed
+    /// mid-exchange can therefore be re-executed on another node — for a
+    /// non-idempotent operation (e.g. `Create`/`Destroy`) that means a possible
+    /// duplicate side effect while the caller still sees success. Prefer
+    /// idempotent operations, or a single-endpoint [`Self::connect`], where that
+    /// matters.
+    pub fn connect_cluster(&self, config: ClusterConfig) -> Result<Client> {
+        self.build_cluster(config)?.connect()
     }
 }
 
@@ -438,6 +480,25 @@ mod tests {
         .unwrap();
         c.reset_cursor();
         c
+    }
+
+    #[test]
+    fn config_defaults_and_builders() {
+        let cfg = ClusterConfig::with_shared_domain(["a:5696", "b:5696"], "kms.example.com");
+        assert_eq!(cfg.endpoints.len(), 2);
+        assert_eq!(
+            cfg.endpoints[0],
+            ("a:5696".to_string(), "kms.example.com".to_string())
+        );
+        assert_eq!(cfg.mode, ClusterMode::Failover);
+        assert_eq!(cfg.cooldown, DEFAULT_RETRY_COOLDOWN);
+
+        let cfg = ClusterConfig::with_endpoints([("a:5696", "n1"), ("b:5696", "n2")])
+            .mode(ClusterMode::RoundRobin)
+            .cooldown(Duration::from_secs(2));
+        assert_eq!(cfg.endpoints[1], ("b:5696".to_string(), "n2".to_string()));
+        assert_eq!(cfg.mode, ClusterMode::RoundRobin);
+        assert_eq!(cfg.cooldown, Duration::from_secs(2));
     }
 
     #[test]

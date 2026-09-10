@@ -23,7 +23,9 @@ use ttlv::{Decodable, Encodable};
 mod batch;
 pub use batch::*;
 
+#[cfg(feature = "cluster")]
 mod cluster;
+#[cfg(feature = "cluster")]
 pub use cluster::*;
 
 pub mod exec;
@@ -158,11 +160,11 @@ pub trait TransportBackend: 'static + Send + Sync {
     /// Parses the CA bundle and client identity into whatever shared TLS state
     /// this backend needs, returning a factory that builds connectors from it.
     ///
-    /// This is the one method a backend implements; both
-    /// [`create_connector`](Self::create_connector) and
-    /// [`create_connectors`](Self::create_connectors) are derived from it, so
-    /// the single- and multi-endpoint paths cannot drift, and "expensive state
-    /// is built once" holds by construction rather than by convention.
+    /// This is the one method a backend implements:
+    /// [`create_connector`](Self::create_connector) is derived from it, and a
+    /// multi-endpoint caller (the `cluster` feature) reuses a single factory
+    /// across its endpoints, so "expensive state is built once" holds by
+    /// construction rather than by convention.
     fn prepare(&self, config: &ConnectorConfig) -> Result<Box<dyn ConnectorFactory>>;
 
     /// Builds a single connector for `addr`, validated against `domain`.
@@ -173,20 +175,6 @@ pub trait TransportBackend: 'static + Send + Sync {
         domain: &str,
     ) -> Result<Arc<dyn Connector>> {
         Ok(self.prepare(config)?.connector(addr, domain))
-    }
-
-    /// Builds a connector for each `(addr, domain)` endpoint, all sharing one
-    /// prepared TLS state instead of rebuilding it per endpoint.
-    fn create_connectors(
-        &self,
-        config: &ConnectorConfig,
-        endpoints: &[(String, String)],
-    ) -> Result<Vec<Arc<dyn Connector>>> {
-        let factory = self.prepare(config)?;
-        Ok(endpoints
-            .iter()
-            .map(|(addr, domain)| factory.connector(addr.clone(), domain))
-            .collect())
     }
 }
 
@@ -309,8 +297,8 @@ impl ClientBuilder {
 
     /// Sets the TCP connect timeout applied when opening each connection. `None`
     /// (the default) uses the OS default, which for a dropped/black-holed host
-    /// can be well over a minute — set a bound when using
-    /// [`Self::connect_cluster`] so failover moves on quickly.
+    /// can be well over a minute — set a bound when dialing a cluster
+    /// (`connect_cluster`, `cluster` feature) so failover moves on quickly.
     ///
     /// Returns [`Error::Config`] for a zero duration (`TcpStream::connect_timeout`
     /// refuses it, failing every dial); use `None` for the OS default.
@@ -352,30 +340,10 @@ impl ClientBuilder {
         Ok(self.build_with_connector(connector))
     }
 
-    /// Builds a `ClientConfig` backed by a [`ClusterConnector`] over every
-    /// endpoint of `config`. Shared by [`connect_cluster`](Self::connect_cluster)
-    /// and, with the `pool` feature, `pool_cluster`. Opens no connection.
-    pub(crate) fn build_cluster(&self, config: ClusterConfig) -> Result<ClientConfig> {
-        let ClusterConfig {
-            endpoints,
-            mode,
-            cooldown,
-        } = config;
-        let connectors = self
-            .backend
-            .create_connectors(&self.connector, &endpoints)?;
-        let labelled = endpoints
-            .into_iter()
-            .map(|(addr, _domain)| addr)
-            .zip(connectors);
-        let cluster = ClusterConnector::new(labelled, cooldown, mode)?;
-        Ok(self.build_with_connector(Arc::new(cluster)))
-    }
-
     /// Builds the `ClientConfig` for an already-created `connector`, carrying
     /// over the protocol settings staged via the `with_*` methods. Shared by
-    /// [`build`](Self::build) and [`connect_cluster`](Self::connect_cluster),
-    /// which supplies a [`ClusterConnector`] spanning several endpoints.
+    /// [`build`](Self::build) and, with the `cluster` feature, `build_cluster`,
+    /// which supplies a connector spanning several endpoints.
     fn build_with_connector(&self, connector: Arc<dyn Connector>) -> ClientConfig {
         let mut config = ClientConfig::new(connector);
         if let Some(versions) = &self.supported_versions {
@@ -408,25 +376,6 @@ impl ClientBuilder {
         self.build(addr, domain)?.connect()
     }
 
-    /// Connects to a pool of KMIP endpoints with failover and optional load
-    /// balancing, using the configured transport backend for every endpoint. See
-    /// [`ClusterConfig`] for the endpoints, [`ClusterMode`], and cooldown.
-    ///
-    /// Each endpoint address is a `"host:port"` string, re-resolved on every
-    /// connection like [`Self::connect`].
-    ///
-    /// Note on retries: a mid-session reconnect (`roundtrip_ttlv` after an
-    /// unexpected EOF, or [`Client::try_clone`]) re-runs endpoint selection and
-    /// may land on a *different* node. A request re-sent after the peer closed
-    /// mid-exchange can therefore be re-executed on another node — for a
-    /// non-idempotent operation (e.g. `Create`/`Destroy`) that means a possible
-    /// duplicate side effect while the caller still sees success. Prefer
-    /// idempotent operations, or a single-endpoint [`Self::connect`], where that
-    /// matters.
-    pub fn connect_cluster(&self, config: ClusterConfig) -> Result<Client> {
-        self.build_cluster(config)?.connect()
-    }
-
     // TODO: Add KMIP authentication
     // TODO: Fine tune TLS cipher suites when/if possible
 }
@@ -445,10 +394,10 @@ fn configure_stream(
 
 /// Whether `e` means the connection itself died, rather than an application
 /// level or transient condition. Single-sourced here because both the client's
-/// reconnect-and-retry guard and the cluster connector's endpoint health
-/// tracking classify the same errors; see
-/// [`MonitoredTransport`](cluster::MonitoredTransport), which treats these plus
-/// a few "never answered" kinds as the endpoint's fault.
+/// reconnect-and-retry guard and, with the `cluster` feature, the cluster
+/// connector's endpoint health tracking classify the same errors; the latter's
+/// `MonitoredTransport` treats these plus a few "never answered" kinds as the
+/// endpoint's fault.
 pub(crate) fn is_disconnect(e: &io::Error) -> bool {
     matches!(
         e.kind(),
@@ -612,12 +561,12 @@ impl Client {
     ///
     /// The negotiated protocol version is carried over and **not** renegotiated.
     /// A single-endpoint client reconnects to the same server, so this holds. A
-    /// clustered client (see [`ClientBuilder::connect_cluster`]) may open the
-    /// clone — and later reconnects — on a *different* node
-    /// ([`ClusterMode::RoundRobin`] always rotates; [`ClusterMode::Failover`]
-    /// re-prefers a recovered leader), so on a version-skewed cluster (e.g. a
-    /// rolling upgrade) the cached version can be one the new node does not
-    /// support. Keep cluster nodes on a common protocol version.
+    /// clustered client (`connect_cluster`, `cluster` feature) may open the
+    /// clone — and later reconnects — on a *different* node (`RoundRobin`
+    /// always rotates; `Failover` re-prefers a recovered leader), so on a
+    /// version-skewed cluster (e.g. a rolling upgrade) the cached version can
+    /// be one the new node does not support. Keep cluster nodes on a common
+    /// protocol version.
     pub fn try_clone(&self) -> Result<Self> {
         self.config.connect()
     }
@@ -923,25 +872,6 @@ mod tests {
         assert_eq!(builder.connector.connect_timeout, None);
         assert_eq!(builder.connector.read_timeout, None);
         assert_eq!(builder.connector.write_timeout, None);
-    }
-
-    #[test]
-    fn cluster_config_defaults_and_builders() {
-        let cfg = ClusterConfig::with_shared_domain(["a:5696", "b:5696"], "kms.example.com");
-        assert_eq!(cfg.endpoints.len(), 2);
-        assert_eq!(
-            cfg.endpoints[0],
-            ("a:5696".to_string(), "kms.example.com".to_string())
-        );
-        assert_eq!(cfg.mode, ClusterMode::Failover);
-        assert_eq!(cfg.cooldown, DEFAULT_RETRY_COOLDOWN);
-
-        let cfg = ClusterConfig::with_endpoints([("a:5696", "n1"), ("b:5696", "n2")])
-            .mode(ClusterMode::RoundRobin)
-            .cooldown(Duration::from_secs(2));
-        assert_eq!(cfg.endpoints[1], ("b:5696".to_string(), "n2".to_string()));
-        assert_eq!(cfg.mode, ClusterMode::RoundRobin);
-        assert_eq!(cfg.cooldown, Duration::from_secs(2));
     }
 
     #[cfg(feature = "default-tls-rustls")]

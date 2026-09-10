@@ -171,6 +171,7 @@ cannot be enabled together (they export conflicting symbols).
 | `default-tls-rustls`  | yes     | Makes rustls the built-in default (enables `Client::builder()`). |
 | `uuid`                | yes     | Implements unique-identifier helpers using the `uuid` crate.                  |
 | `pool`                | no      | Connection pooling for the client via `r2d2` (see below).                     |
+| `cluster`             | no      | Multi-endpoint client with failover and load balancing (`ClientBuilder::connect_cluster`). |
 | `serde`               | no      | Derives `serde::Serialize` on protocol types for logging/inspection.          |
 | `arbitrary`           | no      | Derives `arbitrary::Arbitrary` for fuzzing.                                   |
 | `interop-rust-crypto` | no      | Cryptographic interop using pure-Rust crates (`rsa`, `p256`, `p384`, `p521`). |

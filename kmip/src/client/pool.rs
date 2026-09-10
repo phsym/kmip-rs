@@ -43,7 +43,9 @@ use std::time::Duration;
 
 pub use r2d2;
 
-use super::{Client, ClientBuilder, ClientConfig, ClusterConfig};
+#[cfg(feature = "cluster")]
+use super::ClusterConfig;
+use super::{Client, ClientBuilder, ClientConfig};
 use crate::{RequestMessage, payloads::DiscoverVersionsRequestPayload, types::ProtocolVersion};
 
 impl Client {
@@ -167,6 +169,7 @@ impl ClientBuilder {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "cluster")]
     pub fn pool_cluster(&self, config: ClusterConfig) -> crate::Result<ClientPoolBuilder> {
         let config = self.build_cluster(config)?;
         Ok(ClientPoolBuilder::new(KmipConnectionManager::new(config)))
@@ -423,95 +426,6 @@ mod tests {
         let _ = server.join();
     }
 
-    /// Counts the connections one cluster endpoint was asked to open.
-    struct CountingConnector {
-        inner: LocalConnector,
-        dials: std::sync::atomic::AtomicUsize,
-    }
-
-    impl CountingConnector {
-        fn new(addr: &str) -> Arc<Self> {
-            Arc::new(Self {
-                inner: LocalConnector(addr.to_string()),
-                dials: std::sync::atomic::AtomicUsize::new(0),
-            })
-        }
-        fn dials(&self) -> usize {
-            self.dials.load(std::sync::atomic::Ordering::SeqCst)
-        }
-    }
-
-    impl crate::client::Connector for CountingConnector {
-        fn connect(&self) -> crate::Result<Box<dyn crate::client::Transport>> {
-            self.dials.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            self.inner.connect()
-        }
-    }
-
-    #[test]
-    fn pool_over_a_cluster_spreads_connections_across_endpoints() {
-        use crate::client::{ClusterConnector, ClusterMode, Connector};
-
-        // The combination `pool_cluster` exists to make reachable. Both
-        // endpoints dial the same listener, so this asserts on the selection,
-        // not the socket. Plain TCP, so no TLS server is needed.
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap().to_string();
-        let (ep_a, ep_b) = (CountingConnector::new(&addr), CountingConnector::new(&addr));
-
-        let cluster = ClusterConnector::new(
-            vec![
-                ("ep_a".to_string(), ep_a.clone() as Arc<dyn Connector>),
-                ("ep_b".to_string(), ep_b.clone() as Arc<dyn Connector>),
-            ],
-            Duration::from_secs(5),
-            ClusterMode::RoundRobin,
-        )
-        .unwrap();
-
-        let config = ClientConfig::new(Arc::new(cluster));
-        let pool = ClientPoolBuilder::new(KmipConnectionManager::new(config))
-            .max_size(2)
-            .min_idle(Some(2))
-            .build()
-            .unwrap();
-
-        assert_eq!(pool.state().connections, 2);
-        // The start index advances per connection, so two land one on each
-        // endpoint whatever the random seed.
-        assert_eq!(ep_a.dials(), 1, "endpoint A got no connection");
-        assert_eq!(ep_b.dials(), 1, "endpoint B got no connection");
-    }
-
-    #[cfg(feature = "default-tls-rustls")]
-    #[test]
-    fn pool_cluster_builds_a_pool_builder_without_connecting() {
-        use crate::client::ClusterConfig;
-
-        // Nothing is dialed until `build()`, so this succeeds with nothing
-        // listening.
-        assert!(
-            Client::builder()
-                .pool_cluster(ClusterConfig::with_shared_domain(
-                    ["127.0.0.1:1", "127.0.0.2:1"],
-                    "localhost",
-                ))
-                .is_ok()
-        );
-    }
-
-    #[cfg(feature = "default-tls-rustls")]
-    #[test]
-    fn pool_cluster_rejects_an_empty_endpoint_list() {
-        assert!(matches!(
-            Client::builder().pool_cluster(ClusterConfig::with_shared_domain(
-                Vec::<String>::new(),
-                "localhost",
-            )),
-            Err(crate::Error::ClusterUnavailable(_))
-        ));
-    }
-
     #[test]
     fn build_prewarms_min_idle_by_default() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -648,5 +562,101 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(pool.state().connections, 1);
+    }
+
+    /// Pooling over a cluster: `pool_cluster` and pools whose connector is a
+    /// [`ClusterConnector`](crate::client::ClusterConnector).
+    #[cfg(feature = "cluster")]
+    mod cluster {
+        use super::*;
+
+        /// Counts the connections one cluster endpoint was asked to open.
+        struct CountingConnector {
+            inner: LocalConnector,
+            dials: std::sync::atomic::AtomicUsize,
+        }
+
+        impl CountingConnector {
+            fn new(addr: &str) -> Arc<Self> {
+                Arc::new(Self {
+                    inner: LocalConnector(addr.to_string()),
+                    dials: std::sync::atomic::AtomicUsize::new(0),
+                })
+            }
+            fn dials(&self) -> usize {
+                self.dials.load(std::sync::atomic::Ordering::SeqCst)
+            }
+        }
+
+        impl crate::client::Connector for CountingConnector {
+            fn connect(&self) -> crate::Result<Box<dyn crate::client::Transport>> {
+                self.dials.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.inner.connect()
+            }
+        }
+
+        #[test]
+        fn pool_spreads_connections_across_endpoints() {
+            use crate::client::{ClusterConnector, ClusterMode, Connector};
+
+            // The combination `pool_cluster` exists to make reachable. Both
+            // endpoints dial the same listener, so this asserts on the selection,
+            // not the socket. Plain TCP, so no TLS server is needed.
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap().to_string();
+            let (ep_a, ep_b) = (CountingConnector::new(&addr), CountingConnector::new(&addr));
+
+            let cluster = ClusterConnector::new(
+                vec![
+                    ("ep_a".to_string(), ep_a.clone() as Arc<dyn Connector>),
+                    ("ep_b".to_string(), ep_b.clone() as Arc<dyn Connector>),
+                ],
+                Duration::from_secs(5),
+                ClusterMode::RoundRobin,
+            )
+            .unwrap();
+
+            let config = ClientConfig::new(Arc::new(cluster));
+            let pool = ClientPoolBuilder::new(KmipConnectionManager::new(config))
+                .max_size(2)
+                .min_idle(Some(2))
+                .build()
+                .unwrap();
+
+            assert_eq!(pool.state().connections, 2);
+            // The start index advances per connection, so two land one on each
+            // endpoint whatever the random seed.
+            assert_eq!(ep_a.dials(), 1, "endpoint A got no connection");
+            assert_eq!(ep_b.dials(), 1, "endpoint B got no connection");
+        }
+
+        #[cfg(feature = "default-tls-rustls")]
+        #[test]
+        fn pool_cluster_builds_a_pool_builder_without_connecting() {
+            use crate::client::ClusterConfig;
+
+            // Nothing is dialed until `build()`, so this succeeds with nothing
+            // listening.
+            assert!(
+                Client::builder()
+                    .pool_cluster(ClusterConfig::with_shared_domain(
+                        ["127.0.0.1:1", "127.0.0.2:1"],
+                        "localhost",
+                    ))
+                    .is_ok()
+            );
+        }
+
+        #[cfg(feature = "default-tls-rustls")]
+        #[test]
+        fn pool_cluster_rejects_an_empty_endpoint_list() {
+            assert!(matches!(
+                Client::builder().pool_cluster(ClusterConfig::with_shared_domain(
+                    Vec::<String>::new(),
+                    "localhost",
+                )),
+                Err(crate::Error::ClusterUnavailable(_))
+            ));
+        }
     }
 }
