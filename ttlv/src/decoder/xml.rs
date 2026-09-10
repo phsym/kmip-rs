@@ -82,16 +82,13 @@ impl<'a, E: BorrowMut<Extensions>> XmlDecoder<'a, E> {
         else {
             return Ok(None);
         };
-        Ok(Some(attr.decoded_and_normalized_value(
-            XmlVersion::Implicit1_0,
-            self.reader.decoder(),
-        )?))
+        Ok(Some(attr.normalized_value(XmlVersion::Implicit1_0)?))
     }
 
     fn raw_tag(&'a self) -> Result<Cow<'a, str>> {
         let local = self.get_start()?.name().local_name().into_inner();
-        if local != b"TTLV" {
-            return Ok(Cow::Borrowed(std::str::from_utf8(local)?));
+        if local != "TTLV" {
+            return Ok(Cow::Borrowed(local));
         }
         self.get_attribute("tag")?.ok_or(Error::MissingTag)
     }
