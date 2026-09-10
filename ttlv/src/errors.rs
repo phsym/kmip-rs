@@ -1,9 +1,6 @@
 use core::fmt;
 use std::{
-    array::TryFromSliceError,
-    convert::Infallible,
-    num::ParseIntError,
-    str::{ParseBoolError, Utf8Error},
+    array::TryFromSliceError, convert::Infallible, num::ParseIntError, str::ParseBoolError,
     string::FromUtf8Error,
 };
 
@@ -82,8 +79,6 @@ pub enum Error {
     Io(#[from] std::io::Error),
 
     // XML errors
-    #[error(transparent)]
-    Utf8(#[from] Utf8Error),
     #[cfg(feature = "xml")]
     #[error("XML decoding error; {0}")]
     Xml(#[from] quick_xml::Error),
