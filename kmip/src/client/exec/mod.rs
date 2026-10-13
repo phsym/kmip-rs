@@ -21,6 +21,7 @@ mod get_attributes;
 mod get_usage;
 mod import_export;
 mod locate;
+mod mac_verify;
 mod modify_attribute;
 mod query;
 mod register;
