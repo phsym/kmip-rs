@@ -1,4 +1,4 @@
-use super::{Exec};
+use super::{Exec, WantExec};
 use crate::{
     client::{BatchClient, Client},
     payloads::{MacRequestPayload, MacVerifyRequestPayload},
@@ -18,7 +18,7 @@ impl Client {
             MacRequestPayload {
                 unique_identifier: Some(id.into()),
                 cryptographic_parameters: None,
-                
+                data: None,
                 correlation_value: None,
                 init_indicator: None,
                 final_indicator: None,
@@ -32,7 +32,7 @@ impl Client {
             MacVerifyRequestPayload {
                 unique_identifier: Some(id.into()),
                 cryptographic_parameters: None,
-                
+                data: None,
                 mac_data: None,
                 correlation_value: None,
                 init_indicator: None,
@@ -49,7 +49,7 @@ impl<'a> BatchClient<'a> {
             MacRequestPayload {
                 unique_identifier: id,
                 cryptographic_parameters: None,
-                
+                data: None,
                 correlation_value: None,
                 init_indicator: None,
                 final_indicator: None,
@@ -63,13 +63,20 @@ impl<'a> BatchClient<'a> {
             MacVerifyRequestPayload {
                 unique_identifier: id,
                 cryptographic_parameters: None,
-                
+                data: None,
                 mac_data: None,
                 correlation_value: None,
                 init_indicator: None,
                 final_indicator: None,
             },
         )
+    }
+}
+
+impl<'a> MacExec<'a, WantsData> {
+    pub fn data(mut self, data: impl Into<Vec<u8>>) -> MacExec<'a, WantExec> {
+        self.req.data = Some(data.into());
+        MacExec::new(self.client, self.req)
     }
 }
 
@@ -83,6 +90,13 @@ impl<S> MacExec<'_, S> {
 impl<'a> MacVerifyExec<'a, WantsMac> {
     pub fn mac_data(mut self, mac: impl Into<Vec<u8>>) -> MacVerifyExec<'a, WantsData> {
         self.req.mac_data = Some(mac.into());
+        MacVerifyExec::new(self.client, self.req)
+    }
+}
+
+impl<'a> MacVerifyExec<'a, WantsData> {
+    pub fn data(mut self, data: impl Into<Vec<u8>>) -> MacVerifyExec<'a, WantExec> {
+        self.req.data = Some(data.into());
         MacVerifyExec::new(self.client, self.req)
     }
 }

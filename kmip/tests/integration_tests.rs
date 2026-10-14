@@ -14,7 +14,7 @@ mod tests {
         enums::{
             BatchErrorContinuationOption, BlockCipherMode, CertificateType, CryptographicAlgorithm,
             LinkType, NameType, ObjectType, RecommendedCurve, ResultReason, ResultStatus,
-            SecretDataType, State,
+            SecretDataType, State, ValidityIndicator,
         },
         interop::{FormatEcPrivate, FormatEcPublic, FormatRsaPrivate, FormatRsaPublic},
         payloads::{
@@ -673,6 +673,107 @@ mod tests {
     // //     // );
     // //     assert_eq!(pkey, pkey2);
     // // }
+
+    #[test]
+    fn mac_hmac_sha256() {
+        let mut client = setup::new_client();
+        let key = &b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"[..];
+        let id = client
+            .register()
+            .symmetric_key(
+                key,
+                CryptographicAlgorithm::HmacSha256,
+                kmip::interop::FormatSymmetric::Raw,
+                CryptographicUsageMask::MACGenerate | CryptographicUsageMask::MACVerify,
+            )
+            .unwrap()
+            .with_name("Test-HMAC")
+            .exec()
+            .unwrap()
+            .unique_identifier;
+        client.activate(id.clone()).exec().unwrap();
+
+        let resp = client
+            .mac(id.clone())
+            .data(b"hello world".to_vec())
+            .with_cryptographic_parameters(CryptographicParameters {
+                cryptographic_algorithm: Some(CryptographicAlgorithm::HmacSha256),
+                ..Default::default()
+            })
+            .exec()
+            .unwrap();
+        assert_eq!(resp.unique_identifier, id);
+        // openssl dgst -sha256 -mac HMAC -macopt hexkey:<"a"*32> over "hello world"
+        let mac = resp.mac_data.expect("single-part MAC must return MAC Data");
+        assert_eq!(
+            hex(&mac),
+            "1f9a11c2bf00bf1b5932192f44b0702308877a688d2dfb498a7f5ea1cd172615"
+        );
+
+        // Note: PyKMIP (0.11) cannot parse a MAC Verify request at all and
+        // answers InvalidMessage, so this half needs a server that implements
+        // the operation.
+        let resp = client
+            .mac_verify(id.clone())
+            .mac_data(mac.clone())
+            .data(b"hello world".to_vec())
+            .with_cryptographic_parameters(CryptographicParameters {
+                cryptographic_algorithm: Some(CryptographicAlgorithm::HmacSha256),
+                ..Default::default()
+            })
+            .exec()
+            .unwrap();
+        assert_eq!(resp.unique_identifier, id);
+        assert_eq!(resp.validity_indicator, ValidityIndicator::Valid);
+
+        let mut tampered = mac;
+        tampered[0] ^= 0xFF;
+        let resp = client
+            .mac_verify(id)
+            .mac_data(tampered)
+            .data(b"hello world".to_vec())
+            .exec()
+            .unwrap();
+        assert_eq!(resp.validity_indicator, ValidityIndicator::Invalid);
+    }
+
+    #[test]
+    fn mac_aes_cmac() {
+        let mut client = setup::new_client();
+        let key = &b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"[..];
+        let id = client
+            .register()
+            .symmetric_key(
+                key,
+                CryptographicAlgorithm::AES,
+                kmip::interop::FormatSymmetric::Raw,
+                CryptographicUsageMask::MACGenerate,
+            )
+            .unwrap()
+            .with_name("Test-CMAC")
+            .exec()
+            .unwrap()
+            .unique_identifier;
+        client.activate(id.clone()).exec().unwrap();
+
+        // Cryptographic parameters omitted: the server falls back to the
+        // key's own algorithm (AES => CMAC).
+        let resp = client
+            .mac(id.clone())
+            .data(b"hello world".to_vec())
+            .exec()
+            .unwrap();
+        assert_eq!(resp.unique_identifier, id);
+        // openssl dgst -mac cmac -macopt cipher:aes-256-cbc -macopt hexkey:<"a"*32>
+        assert_eq!(
+            hex(&resp.mac_data.unwrap()),
+            "8fa5cefeb19f200a8d02f2b5a6ca24cc"
+        );
+    }
+
+    fn hex(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
+    }
 
     #[test]
     fn typed_batch() {
