@@ -10,6 +10,7 @@ mod get_attributes;
 mod get_usage;
 mod import_export;
 mod locate;
+mod mac_verify;
 mod modify_attribute;
 mod obtain_lease;
 mod query;
@@ -22,8 +23,8 @@ mod sign_verify;
 pub use {
     add_attribute::*, create::*, create_keypair::*, delete_attribute::*, discover::*,
     encrypt_decrypt::*, get::*, get_attribute_list::*, get_attributes::*, get_usage::*,
-    import_export::*, locate::*, modify_attribute::*, obtain_lease::*, query::*, register::*,
-    rekey::*, rekey_keypair::*, revoke::*, sign_verify::*,
+    import_export::*, locate::*, mac_verify::*, modify_attribute::*, obtain_lease::*, query::*,
+    register::*, rekey::*, rekey_keypair::*, revoke::*, sign_verify::*,
 };
 
 use strum_macros::{EnumIs, EnumTryAs};
@@ -223,4 +224,6 @@ impl_payload! {
     SignatureVerify => SignatureVerifyRequestPayload, SignatureVerifyResponsePayload;
     Import => ImportRequestPayload, ImportResponsePayload;
     Export => ExportRequestPayload, ExportResponsePayload;
+    MAC => MacRequestPayload, MacResponsePayload;
+    MACVerify => MacVerifyRequestPayload, MacVerifyResponsePayload;
 }
