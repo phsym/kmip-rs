@@ -83,7 +83,7 @@ println!("created key: {:?}", response);
 
 Each operation has a dedicated builder under [`client::exec`](kmip/src/client/exec)
 (`create`, `create_keypair`, `register`, `rekey`, `locate`, `get`, `encrypt`,
-`decrypt`, `sign`, `add_attribute`, …). For batched requests use
+`decrypt`, `sign`, `mac`, `add_attribute`, …). For batched requests use
 `client.batch(...)`, and for raw `RequestMessage` exchange use
 `client.roundtrip(&msg)`. Protocol version is auto-negotiated against the
 server's `Discover Versions` response.
@@ -244,8 +244,8 @@ considered a non-breaking change.
 | Decrypt              | N/A  | N/A  | ✅   | ✅   | ✅   |
 | Sign                 | N/A  | N/A  | ✅   | ✅   | ✅   |
 | Signature Verify     | N/A  | N/A  | ✅   | ✅   | ✅   |
-| MAC                  | N/A  | N/A  | ❌   | ❌   | ❌   |
-| MAC Verify           | N/A  | N/A  | ❌   | ❌   | ❌   |
+| MAC                  | N/A  | N/A  | ✅   | ✅   | ✅   |
+| MAC Verify           | N/A  | N/A  | ✅   | ✅   | ✅   |
 | RNG Retrieve         | N/A  | N/A  | ❌   | ❌   | ❌   |
 | RNG Seed             | N/A  | N/A  | ❌   | ❌   | ❌   |
 | Hash                 | N/A  | N/A  | ❌   | ❌   | ❌   |
@@ -284,7 +284,7 @@ considered a non-breaking change.
 | Data                                     | N/A  | N/A  | ✅   | ✅   | ✅   |
 | Data Length                              | N/A  | N/A  | ❌   | ❌   | ❌   |
 | Signature Data                           | N/A  | N/A  | ✅   | ✅   | ✅   |
-| MAC Data                                 | N/A  | N/A  | ❌   | ❌   | ❌   |
+| MAC Data                                 | N/A  | N/A  | ✅   | ✅   | ✅   |
 | Nonce                                    | N/A  | N/A  | ✅   | ✅   | ✅   |
 | Correlation Value                        | N/A  | N/A  | N/A  | ✅   | ✅   |
 | Init Indicator                           | N/A  | N/A  | N/A  | ✅   | ✅   |
