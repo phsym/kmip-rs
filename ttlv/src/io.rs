@@ -12,8 +12,8 @@ const DEFAULT_MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 /// [`with_max_message_size`](Self::with_max_message_size); 16 MiB by default)
 /// are rejected before any body bytes are read.
 pub struct Stream<IO> {
-    io: IO,
-    max_message_size: usize,
+    pub(crate) io: IO,
+    pub(crate) max_message_size: usize,
 }
 
 impl<IO> Stream<IO> {
@@ -69,7 +69,7 @@ impl<IO: std::io::Read> Stream<IO> {
     /// indicate framing or decoding failure.
     pub fn receive<D: Decodable>(&mut self) -> Result<D> {
         let mut read = 0;
-        let mut buf = vec![0; 512];
+        let mut buf = Vec::with_capacity(512);
         let mut need = 8;
         loop {
             buf.resize(need, 0);
@@ -107,7 +107,7 @@ mod tests {
     use crate::{Encodable, Encoder};
     use std::io::Cursor;
 
-    // Decode is never invoked — Stream::receive returns before getting that far in these tests.
+    // Decode is never invoked. Stream::receive returns before getting that far in these tests.
     #[derive(Debug)]
     struct Dummy;
     impl Decodable for Dummy {
@@ -116,7 +116,7 @@ mod tests {
         }
     }
 
-    // A real, decodable TTLV message — used where Dummy can't be (send/roundtrip paths).
+    // A real, decodable TTLV message. Used where Dummy can't be (send/roundtrip paths).
     #[derive(Debug, PartialEq)]
     struct Msg(i32);
 
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_receive_accepts_within_limit() {
-        // Craft a header with length just under the max — the read will fail with EOF
+        // Craft a header with length just under the max. The read will fail with EOF
         // (no body data), but it should NOT be rejected by the size check.
         // Tag=0x420020, Type=Structure(0x01), Length=16 (small message)
         let header: [u8; 8] = [
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn test_stream_with_max_message_size() {
-        // Verify custom limit is honoured: 100-byte limit, 32 MiB declared length → rejected
+        // Verify custom limit is honoured: 100-byte limit, 32 MiB declared length -> rejected
         let header: [u8; 8] = [0x42, 0x00, 0x20, 0x01, 0x02, 0x00, 0x00, 0x00];
         let mut stream = Stream::new(Cursor::new(header)).with_max_message_size(100);
         let err = stream.receive::<Dummy>().unwrap_err();
@@ -210,7 +210,7 @@ mod tests {
         };
         let mut stream = Stream::new(duplex);
 
-        // The send-side payload is irrelevant — only the read-side matters here.
+        // The send-side payload is irrelevant. Only the read-side matters here.
         let decoded: Msg = stream.roundtrip(&Msg(0)).unwrap();
         assert_eq!(decoded, Msg(99));
     }
